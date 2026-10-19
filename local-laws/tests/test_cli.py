@@ -323,7 +323,7 @@ def test_check_freshness_cannot_succeed_without_a_published_reading(tmp_path, of
 
 
 def test_freshness_runs_after_publishing_even_if_an_earlier_check_failed():
-    workflow = yaml.safe_load((Path(__file__).resolve().parents[1] / ".github/workflows/pipeline.yml").read_text())
+    workflow = yaml.safe_load((Path(__file__).resolve().parents[2] / ".github/workflows/local-laws-pipeline.yml").read_text())
     steps = workflow["jobs"]["sync"]["steps"]
     freshness_index = next(i for i, step in enumerate(steps) if step.get("name") == "Check FEMA freshness")
     assert freshness_index > next(i for i, step in enumerate(steps) if step.get("name") == "Check reviewed source pins")
@@ -337,7 +337,9 @@ def test_freshness_runs_after_publishing_even_if_an_earlier_check_failed():
 def test_no_trusted_publisher_message_is_a_github_actions_error(monkeypatch, capsys):
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
     assert cli.trusted_publisher_error(RuntimeError("invalid_grant: No trusted publisher configured"), "owner/data") is True
-    assert "::error::No trusted publisher configured for owner/data" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "::error::No trusted publisher configured for owner/data" in output
+    assert "Register repository incrediblecrab/us-dataset-products, branch main and workflow local-laws-pipeline.yml" in output
 
 
 def test_probe_can_skip_fema_when_the_report_host_refuses_the_cheap_read(published, offline, monkeypatch, capsys):
@@ -545,10 +547,28 @@ def test_probe_compares_a_newer_harvest_when_fema_refuses(published, offline, mo
     assert (report["head"]["nfip"] or {}).get("via") == (nfip.HARVEST if status != "unavailable" else None)
 
 
+@pytest.mark.parametrize("name", ["local-laws-pipeline.yml", "local-laws-test.yml"])
+def test_workflows_use_the_folder_inside_the_shared_checkout(name):
+    workflow = yaml.safe_load((Path(__file__).resolve().parents[2] / ".github/workflows" / name).read_text())
+    assert workflow["name"] == Path(name).stem
+    assert workflow["defaults"] == {"run": {"working-directory": "local-laws"}}
+    group = Path(name).stem + ("-${{ github.ref }}" if name.endswith("-test.yml") else "")
+    assert workflow["concurrency"]["group"] == group
+    for job in workflow["jobs"].values():
+        if not job["steps"][0].get("uses", "").startswith("actions/checkout@"):
+            # A job that checks nothing out has no folder to run in, so each of its run steps must say so.
+            assert all(step.get("working-directory") == "." for step in job["steps"] if "run" in step)
+        for step in job["steps"]:
+            if step.get("uses", "").startswith("actions/setup-python@"):
+                assert step["with"]["cache-dependency-path"] == "local-laws/pyproject.toml"
+
+
 def test_the_test_workflow_runs_the_suite_and_cannot_publish():
-    workflow = yaml.safe_load((Path(__file__).resolve().parents[1] / ".github/workflows/test.yml").read_text())
+    workflow = yaml.safe_load((Path(__file__).resolve().parents[2] / ".github/workflows/local-laws-test.yml").read_text())
     triggers = workflow.get("on", workflow.get(True))  # PyYAML reads the key `on` as True
-    assert set(triggers) == {"push", "pull_request"} and triggers["push"] == {"branches": ["main"]}
+    paths = ["local-laws/**", ".github/workflows/local-laws-test.yml"]
+    assert triggers == {"push": {"branches": ["main"], "paths": paths}, "pull_request": {"paths": paths}}
+    assert workflow["concurrency"] == {"group": "local-laws-test-${{ github.ref }}", "cancel-in-progress": True}
     assert workflow["permissions"] == {"contents": "read"}
     assert all("permissions" not in job for job in workflow["jobs"].values()), "no job widens the read-only token, and none asks for an OIDC token"
     runs = [step["run"] for job in workflow["jobs"].values() for step in job["steps"] if "run" in step]

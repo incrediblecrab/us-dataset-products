@@ -1,6 +1,6 @@
-# us-crs-service-products
+# crs
 
-This repository builds and updates three public Hugging Face datasets of work by the Congressional Research Service (CRS), the research service of the United States Congress. Each dataset card shows how much it holds.
+This folder builds and updates three public Hugging Face datasets of work by the Congressional Research Service (CRS), the research service of the United States Congress. Each dataset card shows how much it holds.
 
 - [us-crs-research-papers](https://huggingface.co/datasets/incrediblecrab/us-crs-research-papers): every CRS product the Congress.gov API lists, active and archived, with full text.
 - [us-crs-bill-summaries](https://huggingface.co/datasets/incrediblecrab/us-crs-bill-summaries): every CRS summary of a bill or resolution of the US Congress that the API lists, from 1973 on.
@@ -14,7 +14,7 @@ This repository builds and updates three public Hugging Face datasets of work by
 
 - [`crs_products/`](crs_products/README.md): the pipeline package
 - [`tests/`](tests/README.md): offline tests
-- [`.github/workflows/`](.github/workflows/README.md): the schedules
+- [`WORKFLOWS.md`](WORKFLOWS.md): the schedules
 - [`pyproject.toml`](pyproject.toml): pinned dependencies; PDF text also needs poppler's `pdftotext`
 
 **Try it:** `pip install .`, then `python -m crs_products run --local /tmp/out --partitions TE10 --max-units 3`, or `python -m crs_products run --dataset summaries --local /tmp/sum --partitions 119-sconres`.

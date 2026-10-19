@@ -1,6 +1,6 @@
-# us-local-laws
+# local-laws
 
-Builds [incrediblecrab/us-local-laws](https://huggingface.co/datasets/incrediblecrab/us-local-laws), a public Hugging Face dataset of the local governments of the United States, with a crosswalk to their ordinance text and, for New York, every local law filed with the State. [What it contains](#what-it-contains) describes the sources, and the dataset card gives the counts, the matching rules and the known gaps.
+This folder builds [incrediblecrab/us-local-laws](https://huggingface.co/datasets/incrediblecrab/us-local-laws), a public Hugging Face dataset of the local governments of the United States, with a crosswalk to their ordinance text and, for New York, every local law filed with the State. [What it contains](#what-it-contains) describes the sources, and the dataset card gives the counts, the matching rules and the known gaps.
 
 **Objective:** map who makes local law in the United States and how much of that law is openly published, using only sources whose terms allow automated use.
 
@@ -8,7 +8,7 @@ Builds [incrediblecrab/us-local-laws](https://huggingface.co/datasets/incredible
 
 **Files:**
 
-- [`.github/workflows/`](.github/workflows/README.md): the scheduled GitHub Actions workflow
+- [`WORKFLOWS.md`](WORKFLOWS.md): the scheduled GitHub Actions workflow
 - [`local_laws/`](local_laws/README.md): the pipeline package
 - [`tests/`](tests/README.md): offline tests
 - [`checks/`](checks/README.md): one-off checks run by hand against a build, whose results the card states

@@ -1,13 +1,13 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) and GitHub Copilot CLI when working in this repository.
+This file provides guidance to Claude Code (claude.ai/code) and GitHub Copilot CLI when working in this folder of the us-dataset-products repository.
 
-This repository builds and keeps current the public Hugging Face dataset `incrediblecrab/us-federal-reserve-beige-book`: every Federal Reserve Beige Book edition from May 1970, one row for the national summary and one per district, with text. The repository is public. `README.md`, `fed_products/README.md` and `tests/README.md` describe each part, and the dataset card states which sections no source serves.
+This folder builds and keeps current the public Hugging Face dataset `incrediblecrab/us-federal-reserve-beige-book`: every Federal Reserve Beige Book edition from May 1970, one row for the national summary and one per district, with text. `README.md`, `fed_products/README.md` and `tests/README.md` describe each part, and the dataset card states which sections no source serves.
 
 ## Commands
 
 ```bash
-.venv/bin/python -m pytest -q                         # offline suite, what test.yml runs on push
+.venv/bin/python -m pytest -q                         # offline suite, what fed-test.yml runs on push
 .venv/bin/python -m pytest -q tests/test_board.py -k <name>
 .venv/bin/python -m fed_products {probe,run,card,verify,squash} --help
 ```
@@ -16,7 +16,7 @@ This repository builds and keeps current the public Hugging Face dataset `incred
 
 ## How it stays current
 
-`.github/workflows/pipeline.yml` runs at 12:37 UTC, which GitHub starts about four hours late (`.github/workflows/README.md` has the measurement), and publishes through Hugging Face Trusted Publishing with no stored token. GitHub disables schedules after 60 days without a commit; the workflow's `inactivity` job fails at 50 days to warn first and deliberately makes no keepalive commit, which GitHub treats as a Terms violation, so do not add one.
+`../.github/workflows/fed-pipeline.yml` runs at 12:37 UTC, which GitHub starts about four hours late (`WORKFLOWS.md` has the measurement), and publishes through Hugging Face Trusted Publishing with no stored token. GitHub disables schedules after 60 days without a commit; the workflow's `inactivity` job fails at 50 days to warn first and deliberately makes no keepalive commit, which GitHub treats as a Terms violation, so do not add one.
 
 ## Structure
 

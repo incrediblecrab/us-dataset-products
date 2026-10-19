@@ -498,7 +498,8 @@ def checked():
         lines.append(f"Every filing checked, the oldest filed {day(min(main['first_filed'], second['first_filed']))}, has text the search reads: a term the check asked, such as \"hereby\" or \"enacted\", is in its text and not its metadata.")
     else:
         lines.append(f"{with_text:,} of the {filings:,} filings checked have text the search reads: a term the check asked, such as \"hereby\" or \"enacted\", is in their text and not their metadata.")
-    lines.append(f"A sample of {n} cannot rule out wrong matches among several percent of filings. [`local_laws/precision.py`]({GITHUB}/blob/main/local_laws/precision.py) keeps the draw and every answer, and [`checks/ny_precision.py`]({GITHUB}/blob/main/checks/ny_precision.py) redraws it from the published tables.")
+    code = GITHUB.replace("/tree/", "/blob/", 1)
+    lines.append(f"A sample of {n} cannot rule out wrong matches among several percent of filings. [`local_laws/precision.py`]({code}/local_laws/precision.py) keeps the draw and every answer, and [`checks/ny_precision.py`]({code}/checks/ny_precision.py) redraws it from the published tables.")
     return " ".join(lines)
 
 

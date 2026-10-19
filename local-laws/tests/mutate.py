@@ -235,9 +235,9 @@ def main():
         raise SystemExit(f"the code behind these mutations has changed or repeats; update them: {stale}")
     missed = []
     with tempfile.TemporaryDirectory(prefix="local-laws-mutate-") as scratch:
-        copy = Path(scratch).resolve()
+        copy = Path(scratch).resolve() / REPO.name
         shutil.copytree(REPO / "tests", copy / "tests", ignore=IGNORE)
-        shutil.copytree(REPO / ".github", copy / ".github")
+        shutil.copytree(REPO.parent / ".github", copy.parent / ".github")
         env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1", PYTHONPATH=str(copy))
         for module, label, old, new in MUTATIONS:
             shutil.rmtree(copy / "local_laws", ignore_errors=True)

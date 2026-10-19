@@ -7,7 +7,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
-USER_AGENT = "us-crs-service-products/0.2 (+https://github.com/incrediblecrab/us-crs-service-products)"
+USER_AGENT = "us-dataset-products-crs/0.2 (+https://github.com/incrediblecrab/us-dataset-products)"
 
 # Minimum seconds between requests to each host within one process.
 # api.congress.gov documents 5,000 requests/hour per key; 0.9 s keeps a run near 4,000/hour.

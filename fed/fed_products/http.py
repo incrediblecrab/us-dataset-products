@@ -6,7 +6,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
-USER_AGENT = "us-fed-research-service-products/0.1 (+https://github.com/incrediblecrab/us-fed-research-service-products)"
+USER_AGENT = "us-dataset-products-fed/0.1 (+https://github.com/incrediblecrab/us-dataset-products)"
 
 # Minimum seconds between requests to one host within one process. Neither www.federalreserve.gov nor www.minneapolisfed.org publishes a rate limit (the Board's robots.txt answers 404; Minneapolis's disallows only /api/, search and a few other paths, measured September 25, 2026), so each gets one request a second.
 HOST_INTERVAL = {}

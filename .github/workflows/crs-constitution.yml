@@ -1,6 +1,6 @@
 # At 12:37 UTC, which GitHub has been starting about four hours late, near 17:00 UTC (12:00 EST, 13:00 EDT), list the Constitution Annotated on GovInfo (26 requests and 1.7 minutes when nothing had changed, on September 26, 2026), fetch the units that are new or whose package's lastModified changed, and commit. Every run downloads manifest.json, which the Hub counts as a download of the dataset. After a run that committed, verify the Hub against the manifest and GovInfo, and squash long history.
 # Writes to Hugging Face use Trusted Publishing: with `id-token: write`, the CLI sets HF_OIDC_RESOURCE from the dataset's repo, so no Hugging Face token is stored anywhere. The only secret is the api.data.gov key, which GovInfo counts separately from api.congress.gov.
-name: constitution
+name: crs-constitution
 
 on:
   schedule:
@@ -16,8 +16,12 @@ on:
 
 permissions: {}
 
+defaults:
+  run:
+    working-directory: crs
+
 concurrency:
-  group: constitution
+  group: crs-constitution
   cancel-in-progress: false
 
 jobs:
@@ -34,7 +38,7 @@ jobs:
         with:
           python-version: "3.14"
           cache: pip
-          cache-dependency-path: pyproject.toml
+          cache-dependency-path: crs/pyproject.toml
       - run: pip install -q .
       - name: Sync
         id: sync

@@ -1,16 +1,22 @@
-# Runs the test suite on every push to main and every pull request, so a change that breaks the pipeline fails here rather than in the next scheduled sync. It reads nothing from the Hub and cannot publish: no id-token, read-only contents.
-name: test
+# Runs the test suite on pushes to main and pull requests that change crs/ or this workflow, so a change that breaks the pipeline fails here rather than in the next scheduled sync. It reads nothing from the Hub and cannot publish: no id-token, read-only contents.
+name: crs-test
 
 on:
   push:
     branches: [main]
+    paths: ['crs/**', '.github/workflows/crs-test.yml']
   pull_request:
+    paths: ['crs/**', '.github/workflows/crs-test.yml']
 
 permissions:
   contents: read
 
+defaults:
+  run:
+    working-directory: crs
+
 concurrency:
-  group: test-${{ github.ref }}
+  group: crs-test-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -28,6 +34,6 @@ jobs:
         with:
           python-version: "3.14"
           cache: pip
-          cache-dependency-path: pyproject.toml
+          cache-dependency-path: crs/pyproject.toml
       - run: pip install -q ".[test]"
       - run: python -m pytest -q

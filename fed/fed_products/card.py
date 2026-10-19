@@ -8,8 +8,8 @@ from .beige_book import MINNEAPOLIS_RECHECK_DAYS, RECENT_DAYS, RECENT_RECHECK_DA
 from .pipeline import LEASE_MINUTES, LISTING_HOURS, MAX_ATTEMPTS, PROBE_KEY, RETRY_AFTER_HOURS, probe_state
 from .sections import DISTRICTS, STANDARD, rank
 
-GITHUB = "https://github.com/incrediblecrab/us-fed-research-service-products"
-# The workflow's cron (.github/workflows/pipeline.yml); a test holds the two equal.
+GITHUB = "https://github.com/incrediblecrab/us-dataset-products/tree/main/fed"
+# The workflow's cron (.github/workflows/fed-pipeline.yml at the repository root); a test holds the two equal.
 SCHEDULE = "37 12 * * *"
 BOARD_TERMS = "https://www.federalreserve.gov/disclaimer.htm"
 MINNEAPOLIS_TERMS = "https://www.minneapolisfed.org/site-information/disclaimer"

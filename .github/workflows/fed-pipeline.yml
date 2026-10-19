@@ -1,6 +1,6 @@
 # At 12:37 UTC, which GitHub has been starting about four hours late, near 17:00 UTC (12:00 EST, 13:00 EDT), probe: one request to the Board's Beige Book landing page, and one read of the dataset's metadata, whose card carries the lease, backoff and listing state from the manifest (downloading manifest.json itself would count as a dataset download). When the probe says a sync is needed, sync within the time budget; after a sync that committed, verify the Hub against the manifest and every list, and squash long history. A sync that ran out of budget while still fetching starts the next run itself.
 # Writes to Hugging Face use Trusted Publishing: with `id-token: write`, the CLI sets HF_OIDC_RESOURCE from its --repo, so no Hugging Face token is stored anywhere. The workflow uses no secret.
-name: pipeline
+name: fed-pipeline
 
 on:
   schedule:
@@ -16,9 +16,13 @@ on:
 
 permissions: {}
 
+defaults:
+  run:
+    working-directory: fed
+
 # One run at a time: a scheduled run that starts while another run is still syncing waits for it. GitHub keeps at most one run waiting and cancels older waiting runs.
 concurrency:
-  group: pipeline
+  group: fed-pipeline
   cancel-in-progress: false
 
 jobs:
@@ -37,7 +41,7 @@ jobs:
         with:
           python-version: "3.14"
           cache: pip
-          cache-dependency-path: pyproject.toml
+          cache-dependency-path: fed/pyproject.toml
       - run: pip install -q .
       - name: Probe
         id: probe
@@ -78,11 +82,13 @@ jobs:
     permissions:
       actions: write
     steps:
+      # This job checks nothing out, so it runs from the empty workspace rather than the folder the workflow's defaults name.
       - name: Start the next run
+        working-directory: .
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-        run: gh workflow run pipeline.yml --ref "$GITHUB_REF_NAME"
+        run: gh workflow run fed-pipeline.yml --ref "$GITHUB_REF_NAME"
 
   # GitHub disables schedules in a public repository after 60 days without repository activity. This job makes no commit to prevent that: GitHub called keepalive commits a violation of its Terms for circumventing that policy (https://github.com/ddev/github-action-add-on-test/issues/46). Instead it fails once the last commit is 50 days old, so GitHub notifies the user who last changed the cron, who can push one. It runs on every scheduled run, because GitHub starts scheduled runs late or drops them. The log names the schedule that started the run.
   inactivity:

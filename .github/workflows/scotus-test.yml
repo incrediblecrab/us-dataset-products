@@ -1,16 +1,22 @@
-# Runs the test suite on every push to main and every pull request, so a change that breaks the pipeline fails here rather than in the next scheduled sync. It reads nothing from the Hub and cannot publish: no id-token, read-only contents.
-name: test
+# Runs the test suite on pushes to main and pull requests that change scotus/ or this workflow, so a change that breaks the pipeline fails here rather than in the next scheduled sync. It reads nothing from the Hub and cannot publish: no id-token, read-only contents.
+name: scotus-test
 
 on:
   push:
     branches: [main]
+    paths: ['scotus/**', '.github/workflows/scotus-test.yml']
   pull_request:
+    paths: ['scotus/**', '.github/workflows/scotus-test.yml']
 
 permissions:
   contents: read
 
+defaults:
+  run:
+    working-directory: scotus
+
 concurrency:
-  group: test-${{ github.ref }}
+  group: scotus-test-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -28,6 +34,6 @@ jobs:
         with:
           python-version: "3.14"
           cache: pip
-          cache-dependency-path: pyproject.toml
+          cache-dependency-path: scotus/pyproject.toml
       - run: pip install -q ".[test]"
       - run: python -m pytest -q

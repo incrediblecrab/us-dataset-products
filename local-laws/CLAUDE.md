@@ -1,13 +1,13 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) and GitHub Copilot CLI when working in this repository.
+This file provides guidance to Claude Code (claude.ai/code) and GitHub Copilot CLI when working in this folder of the us-dataset-products repository.
 
-This repository builds and publishes the public Hugging Face dataset `incrediblecrab/us-local-laws`: every US local government in the 2022 Census of Governments, crosswalked to LOCUS-v1 ordinance text, New York's local-law filings, BIA-recognized Tribes and FEMA's Community Status Book. The repository is public. `README.md` gives sources, terms and the run schedule; `local_laws/README.md`, `tests/README.md` and `checks/README.md` describe their folders.
+This folder builds and publishes the public Hugging Face dataset `incrediblecrab/us-local-laws`: every US local government in the 2022 Census of Governments, crosswalked to LOCUS-v1 ordinance text, New York's local-law filings, BIA-recognized Tribes and FEMA's Community Status Book. `README.md` gives sources, terms and the run schedule; `local_laws/README.md`, `tests/README.md` and `checks/README.md` describe their folders.
 
 ## Commands
 
 ```bash
-.venv/bin/python -m pytest -q                         # offline suite, what test.yml runs on push
+.venv/bin/python -m pytest -q                         # offline suite, what local-laws-test.yml runs on push
 .venv/bin/python -m pytest -q tests/test_nfip.py -k <name>
 .venv/bin/python tests/mutate.py                      # disables each check in a copy; fails unless the suite catches it
 .venv/bin/python -m local_laws {probe,run,verify,card,check-pins,check-freshness,harvest-ny,harvest-nfip} --help

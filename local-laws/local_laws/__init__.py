@@ -2,4 +2,4 @@
 
 __version__ = "0.5.0"
 REPO_ID = "incrediblecrab/us-local-laws"
-GITHUB = "https://github.com/incrediblecrab/us-local-laws"
+GITHUB = "https://github.com/incrediblecrab/us-dataset-products/tree/main/local-laws"

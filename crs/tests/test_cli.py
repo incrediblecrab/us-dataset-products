@@ -1,4 +1,4 @@
-"""The CLI's contract with the workflows: exit codes, $GITHUB_OUTPUT keys, Trusted Publishing, each dataset's routing, and workflows that call only commands, options and outputs the CLI has. Also pipeline.yml's inactivity job."""
+"""The CLI's contract with the workflows: exit codes, $GITHUB_OUTPUT keys, Trusted Publishing, each dataset's routing, and workflows that call only commands, options and outputs the CLI has. Also crs-pipeline.yml's inactivity job."""
 
 import json
 import os
@@ -20,11 +20,11 @@ from crs_products.store import CARD, LocalStore
 from crs_products.store import partition_of as products_partition_of
 from conftest import ScriptedSource, local_store, run_once, scripted
 
-WORKFLOWS = Path(__file__).parent.parent / ".github" / "workflows"
-WORKFLOW = WORKFLOWS / "pipeline.yml"
+WORKFLOWS = Path(__file__).resolve().parents[2] / ".github" / "workflows"
+WORKFLOW = WORKFLOWS / "crs-pipeline.yml"
 # Each workflow, the dataset its commands name, and the commands it runs.
-DATASETS = {"pipeline.yml": "products", "summaries.yml": "summaries", "constitution.yml": "constitution"}
-COMMANDS = {"pipeline.yml": {"run", "probe", "verify", "squash"}, "summaries.yml": {"run", "verify", "squash"}, "constitution.yml": {"run", "verify", "squash"}}
+DATASETS = {"crs-pipeline.yml": "products", "crs-summaries.yml": "summaries", "crs-constitution.yml": "constitution"}
+COMMANDS = {"crs-pipeline.yml": {"run", "probe", "verify", "squash"}, "crs-summaries.yml": {"run", "verify", "squash"}, "crs-constitution.yml": {"run", "verify", "squash"}}
 # What each command writes to $GITHUB_OUTPUT. The probe and run tests check the commands against this, and the workflow test checks the workflow's if: expressions against it.
 OUTPUTS = {"probe": {"needed"}, "run": {"commits", "more"}}
 
@@ -267,8 +267,22 @@ def shell_argv(line, env):
     return done.stdout.split("\0")[:-1]
 
 
-def test_every_workflow_is_checked_here():
-    assert sorted(path.name for path in WORKFLOWS.iterdir() if path.suffix in (".yml", ".yaml")) == sorted([*DATASETS, "test.yml"])
+def test_every_crs_workflow_is_checked_here():
+    assert sorted(path.name for path in WORKFLOWS.glob("crs-*") if path.suffix in (".yml", ".yaml")) == sorted([*DATASETS, "crs-test.yml"])
+
+
+@pytest.mark.parametrize("name", [*sorted(DATASETS), "crs-test.yml"])
+def test_workflows_use_the_folder_inside_the_shared_checkout(name):
+    workflow = yaml.safe_load((WORKFLOWS / name).read_text())
+    assert workflow["name"] == Path(name).stem
+    assert workflow["defaults"] == {"run": {"working-directory": "crs"}}
+    for job in workflow["jobs"].values():
+        if not job["steps"][0].get("uses", "").startswith("actions/checkout@"):
+            # A job that checks nothing out has no folder to run in, so each of its run steps must say so.
+            assert all(step.get("working-directory") == "." for step in job["steps"] if "run" in step)
+        for step in job["steps"]:
+            if step.get("uses", "").startswith("actions/setup-python@"):
+                assert step["with"]["cache-dependency-path"] == "crs/pyproject.toml"
 
 
 @pytest.mark.parametrize("name", sorted(DATASETS))
@@ -314,7 +328,7 @@ def test_the_workflow_calls_only_commands_options_and_outputs_the_cli_has(monkey
         assert key in jobs[job_name].get("outputs", {}), f"needs.{job_name}.outputs.{key}: job {job_name} declares no output {key}"
     # A job that starts runs starts this workflow, never after a bounded test, and holds no permission to touch the dataset; the job that parses downloads cannot start runs.
     starters = [job for job in jobs.values() if any("gh workflow run" in (step.get("run") or "") for step in job["steps"])]
-    assert bool(starters) == bool(needed) == (name != "constitution.yml")
+    assert bool(starters) == bool(needed) == (name != "crs-constitution.yml")
     for job in starters:
         assert all(f"gh workflow run {name} " in step["run"] for step in job["steps"] if "gh workflow run" in (step.get("run") or ""))
         assert "!inputs.args" in job["if"] and job["permissions"] == {"actions": "write"}
@@ -384,9 +398,11 @@ def test_inactivity_runs_on_every_schedule_and_fails_from_50_idle_days_without_c
 
 
 def test_the_test_workflow_runs_the_suite_and_cannot_publish():
-    workflow = yaml.safe_load((WORKFLOWS / "test.yml").read_text())
+    workflow = yaml.safe_load((WORKFLOWS / "crs-test.yml").read_text())
     triggers = workflow.get("on", workflow.get(True))  # PyYAML reads the key `on` as True
-    assert set(triggers) == {"push", "pull_request"} and triggers["push"] == {"branches": ["main"]}
+    paths = ["crs/**", ".github/workflows/crs-test.yml"]
+    assert triggers == {"push": {"branches": ["main"], "paths": paths}, "pull_request": {"paths": paths}}
+    assert workflow["concurrency"] == {"group": "crs-test-${{ github.ref }}", "cancel-in-progress": True}
     assert workflow["permissions"] == {"contents": "read"}
     assert all("permissions" not in job for job in workflow["jobs"].values()), "no job widens the read-only token, and none asks for an OIDC token"
     runs = [step["run"] for job in workflow["jobs"].values() for step in job["steps"] if "run" in step]

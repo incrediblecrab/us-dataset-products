@@ -33,7 +33,7 @@ TYPES = ("hr", "s", "hjres", "sjres", "hconres", "sconres", "hres", "sres")
 EPOCH = "1900-01-01T00:00:00Z"
 # Each run reads again what changed this long before the last run's newest updateDate.
 OVERLAP_HOURS = 48
-# How often .github/workflows/summaries.yml runs (its cron says the same; a test checks).
+# How often .github/workflows/crs-summaries.yml at the repository root runs (its cron says the same; a test checks).
 SCHEDULE_HOURS = 24
 # The daily check runs on the first run this long after the last one: under 24 hours and over 24 - SCHEDULE_HOURS, so it keeps to one slot of the schedule. With one run a day it is well under 24 hours, because GitHub starts scheduled runs hours late by varying amounts, and a run that started less than a day after the one before must still check.
 RECONCILE_HOURS = 12

@@ -20,8 +20,8 @@ from fed_products.pipeline import Context
 from fed_products.store import CARD, LocalStore
 from conftest import ScriptedSource, local_store, run_once, scripted
 
-WORKFLOWS = Path(__file__).parent.parent / ".github" / "workflows"
-WORKFLOW = WORKFLOWS / "pipeline.yml"
+WORKFLOWS = Path(__file__).resolve().parents[2] / ".github" / "workflows"
+WORKFLOW = WORKFLOWS / "fed-pipeline.yml"
 # What each command writes to $GITHUB_OUTPUT. The probe and run tests check the commands against this, and the workflow test checks the workflow's if: expressions against it.
 OUTPUTS = {"probe": {"needed"}, "run": {"commits", "more"}}
 BOARD = ["2026-01-14", "2026-03-04"]
@@ -250,8 +250,22 @@ def load_workflow():
     return workflow, workflow.get("on", workflow.get(True))  # PyYAML reads the key `on` as True
 
 
-def test_the_only_workflow_is_the_one_checked_here():
-    assert sorted(path.name for path in WORKFLOWS.iterdir() if path.suffix in (".yml", ".yaml")) == ["pipeline.yml", "test.yml"]
+def test_every_fed_workflow_is_checked_here():
+    assert sorted(path.name for path in WORKFLOWS.glob("fed-*") if path.suffix in (".yml", ".yaml")) == ["fed-pipeline.yml", "fed-test.yml"]
+
+
+@pytest.mark.parametrize("name", ["fed-pipeline.yml", "fed-test.yml"])
+def test_workflows_use_the_folder_inside_the_shared_checkout(name):
+    workflow = yaml.safe_load((WORKFLOWS / name).read_text())
+    assert workflow["name"] == Path(name).stem
+    assert workflow["defaults"] == {"run": {"working-directory": "fed"}}
+    for job in workflow["jobs"].values():
+        if not job["steps"][0].get("uses", "").startswith("actions/checkout@"):
+            # A job that checks nothing out has no folder to run in, so each of its run steps must say so.
+            assert all(step.get("working-directory") == "." for step in job["steps"] if "run" in step)
+        for step in job["steps"]:
+            if step.get("uses", "").startswith("actions/setup-python@"):
+                assert step["with"]["cache-dependency-path"] == "fed/pyproject.toml"
 
 
 def test_the_workflow_calls_only_commands_options_and_outputs_the_cli_has(monkeypatch):
@@ -356,9 +370,11 @@ def test_inactivity_runs_on_every_schedule_and_fails_from_50_idle_days_without_c
 
 
 def test_the_test_workflow_runs_the_suite_and_cannot_publish():
-    workflow = yaml.safe_load((WORKFLOWS / "test.yml").read_text())
+    workflow = yaml.safe_load((WORKFLOWS / "fed-test.yml").read_text())
     triggers = workflow.get("on", workflow.get(True))  # PyYAML reads the key `on` as True
-    assert set(triggers) == {"push", "pull_request"} and triggers["push"] == {"branches": ["main"]}
+    paths = ["fed/**", ".github/workflows/fed-test.yml"]
+    assert triggers == {"push": {"branches": ["main"], "paths": paths}, "pull_request": {"paths": paths}}
+    assert workflow["concurrency"] == {"group": "fed-test-${{ github.ref }}", "cancel-in-progress": True}
     assert workflow["permissions"] == {"contents": "read"}
     assert all("permissions" not in job for job in workflow["jobs"].values()), "no job widens the read-only token, and none asks for an OIDC token"
     runs = [step["run"] for job in workflow["jobs"].values() for step in job["steps"] if "run" in step]

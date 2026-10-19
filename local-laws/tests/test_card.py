@@ -25,6 +25,13 @@ def test_the_published_card_is_the_render_of_the_published_manifest(published):
     assert store.read_text(CARD) == render(json.loads(store.read_text("manifest.json"))) == render(json.loads(manifest_text(manifest)))
 
 
+def test_code_links_point_to_the_folder_in_the_shared_repository(published):
+    card = render(published[1])
+    assert "(https://github.com/incrediblecrab/us-dataset-products/tree/main/local-laws)" in card
+    for path in ("local_laws/precision.py", "checks/ny_precision.py"):
+        assert f"(https://github.com/incrediblecrab/us-dataset-products/blob/main/local-laws/{path})" in card
+
+
 def test_source_reading_dates_and_fema_freshness_limit_are_prominent(published):
     card = render(published[1])
     section = card[card.index("## Source freshness"):card.index("## Coverage")]

@@ -6,7 +6,7 @@
 
 **Files:**
 
-- [`pipeline.yml`](pipeline.yml): `probe` reads the Board's landing page and the card's metadata. When needed, `run` syncs; `verify --live` and `squash` follow a commit. `continue` starts the next run when one ran out of budget mid-fetch. `inactivity` fails after 50 days without a commit, before GitHub disables every schedule here at 60. It makes no keepalive commit: GitHub [called](https://github.com/ddev/github-action-add-on-test/issues/46) that a Terms violation.
-- [`test.yml`](test.yml): runs the test suite on every push to `main` and every pull request, with read-only contents and no OIDC token, so it cannot publish.
+- [`fed-pipeline.yml`](../.github/workflows/fed-pipeline.yml): `probe` reads the Board's landing page and the card's metadata. When needed, `run` syncs; `verify --live` and `squash` follow a commit. `continue` starts the next run when one ran out of budget mid-fetch. `inactivity` fails after 50 days without a commit, before GitHub disables every schedule here at 60. It makes no keepalive commit: GitHub [called](https://github.com/ddev/github-action-add-on-test/issues/46) that a Terms violation.
+- [`fed-test.yml`](../.github/workflows/fed-test.yml): runs the test suite on pushes to `main` and pull requests that change `fed/` or this workflow, with read-only contents and no OIDC token, so it cannot publish.
 
-GitHub reports a failed scheduled run to whoever last changed its cron, by email if their settings allow. A dispatch with `args` runs only a bounded test. `.github/` has no README, which GitHub would show instead of the repository's.
+GitHub reports a failed scheduled run to whoever last changed its cron, by email if their settings allow. A dispatch with `args` runs only a bounded test. The root's `.github/` has no README, which GitHub would show instead of the repository's.

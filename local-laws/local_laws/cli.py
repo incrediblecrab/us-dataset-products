@@ -48,7 +48,7 @@ def warn(message, level="warning"):
 def trusted_publisher_error(error, repo):
     if NO_PUBLISHER not in str(error):
         return False
-    warn(f"{NO_PUBLISHER} for {repo}, so nothing was written. Register repository incrediblecrab/us-local-laws, branch main and workflow pipeline.yml under the dataset's Settings > Trusted Publishers.", level="error")
+    warn(f"{NO_PUBLISHER} for {repo}, so nothing was written. Register repository incrediblecrab/us-dataset-products, branch main and workflow local-laws-pipeline.yml under the dataset's Settings > Trusted Publishers.", level="error")
     github_output(commits=0)
     return True
 

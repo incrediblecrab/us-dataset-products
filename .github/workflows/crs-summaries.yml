@@ -1,10 +1,10 @@
 # At 12:37 UTC, which GitHub has been starting about four hours late, near 17:00 UTC (12:00 EST, 13:00 EDT), read the CRS bill and resolution summaries changed since the last run and commit the slices they change. Each run also asks the API for every slice's count and reads again in full the slices that differ, and the slices read longest ago. After a run that committed, verify the Hub against the manifest (the daily count check is the comparison with the API), and squash long history. A run that ran out of budget while still reading starts the next run itself.
-# Writes to Hugging Face use Trusted Publishing: with `id-token: write`, the CLI sets HF_OIDC_RESOURCE from the dataset's repo, so no Hugging Face token is stored anywhere. The only secret is the api.data.gov key, which pipeline.yml uses too.
-name: summaries
+# Writes to Hugging Face use Trusted Publishing: with `id-token: write`, the CLI sets HF_OIDC_RESOURCE from the dataset's repo, so no Hugging Face token is stored anywhere. The only secret is the api.data.gov key, which crs-pipeline.yml uses too.
+name: crs-summaries
 
 on:
   schedule:
-    # Every SCHEDULE_HOURS in crs_products/summaries.py; a test checks that the two agree.
+    # Every SCHEDULE_HOURS in crs/crs_products/summaries.py; a test checks that the two agree.
     - cron: "37 12 * * *"
   workflow_dispatch:
     inputs:
@@ -17,8 +17,12 @@ on:
 
 permissions: {}
 
+defaults:
+  run:
+    working-directory: crs
+
 concurrency:
-  group: summaries
+  group: crs-summaries
   cancel-in-progress: false
 
 jobs:
@@ -37,7 +41,7 @@ jobs:
         with:
           python-version: "3.14"
           cache: pip
-          cache-dependency-path: pyproject.toml
+          cache-dependency-path: crs/pyproject.toml
       - run: pip install -q .
       - name: Sync
         id: sync
@@ -73,8 +77,10 @@ jobs:
     permissions:
       actions: write
     steps:
+      # This job checks nothing out, so it runs from the empty workspace rather than the folder the workflow's defaults name.
       - name: Start the next run
+        working-directory: .
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-        run: gh workflow run summaries.yml --ref "$GITHUB_REF_NAME"
+        run: gh workflow run crs-summaries.yml --ref "$GITHUB_REF_NAME"

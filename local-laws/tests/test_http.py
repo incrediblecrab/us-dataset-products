@@ -3,7 +3,7 @@
 import httpx
 import pytest
 
-from local_laws import GITHUB
+from local_laws import __version__
 from local_laws.http import USER_AGENT, Blocked, Fetcher, Unavailable
 
 URL = "https://www2.census.gov/programs-surveys/gus/datasets/2022/govt_units_2022.ZIP"
@@ -23,7 +23,8 @@ def test_a_body_is_returned_and_the_pipeline_names_itself():
 
     client, slept = fetcher(handler)
     assert client.get(URL) == b"zip bytes"
-    assert agents == [USER_AGENT] and USER_AGENT.endswith(f"(+{GITHUB})") and client.requests == 1 and slept == []
+    assert agents == [USER_AGENT] and client.requests == 1 and slept == []
+    assert USER_AGENT == f"us-dataset-products-local-laws/{__version__} (+https://github.com/incrediblecrab/us-dataset-products)"
 
 
 @pytest.mark.parametrize("headers, content", [({"cf-mitigated": "challenge"}, b""), ({}, b"<html><title>Just a moment...</title>")])
