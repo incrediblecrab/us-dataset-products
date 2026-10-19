@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "us-crs-service-products"
+version = "0.2.0"
+description = "Builds and keeps current three Hugging Face datasets of US Congressional Research Service work: its products, its bill and resolution summaries, and the Constitution Annotated."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.14"
+# Exact versions: this is an unattended application, and these are the versions the tests and live runs used.
+dependencies = [
+    "httpx==0.28.1",
+    "lxml==6.1.3",
+    "pyarrow==25.0.1",
+    "huggingface_hub==1.32.0",
+]
+
+[project.optional-dependencies]
+test = ["pytest==9.1.1", "PyYAML==6.0.3"]
+
+[tool.setuptools]
+packages = ["crs_products"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
