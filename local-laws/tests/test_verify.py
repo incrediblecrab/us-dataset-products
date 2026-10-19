@@ -1,0 +1,435 @@
+"""verify against a fixture build: clean, it finds nothing; with each defect planted, it names that defect."""
+
+import json
+
+import httpx
+import pyarrow as pa
+import pyarrow.parquet as pq
+import pytest
+
+from conftest import NFIP_API, NFIP_CSV, NY_INDEX, NY_SAMPLE, ORG02, TRIBES_NOTICE, TRIBES_PREVIOUS, FakeFetcher, nfip_snapshot, rezipped, sha256
+from local_laws import census, locus, nfip, nyindex, tribes
+from local_laws.build import SORT_KEYS, manifest_text, summarize
+from local_laws.card import render
+from local_laws.census import SourceChanged
+from local_laws.http import Blocked, Unavailable
+from local_laws.schema import TABLES
+from local_laws.store import CARD, MANIFEST, sha256_file, write_parquet
+from local_laws.verify import verify
+
+GOVERNMENTS, CROSSWALK, NY = TABLES["governments"]["file"], TABLES["locus_crosswalk"]["file"], TABLES["ny_local_laws"]["file"]
+ROWS = {"governments": 50, "locus_crosswalk": 25, "ny_local_laws": NY_SAMPLE["total"], "ny_local_law_index": 14, "federally_recognized_tribes": 19, "nfip_communities": 25}
+
+
+def check(store, stated=None, fetcher=True):
+    """verify's problems, with LOCUS's card stating the manifest's row count unless told otherwise."""
+    def stated_rows():
+        return json.loads(store.read_text(MANIFEST))["sources"]["locus"]["rows"] if stated is None else stated
+
+    return verify(store, fetcher=FakeFetcher() if fetcher else None, stated_rows=stated_rows)["problems"]
+
+
+def edit_table(store, name, edit):
+    spec = TABLES[name]
+    rows = store.read_table(spec["file"]).to_pylist()
+    edit(rows)
+    pq.write_table(pa.Table.from_pylist(rows, schema=spec["schema"]), store.root / spec["file"])
+
+
+def edit_manifest(store, edit):
+    manifest = json.loads(store.read_text(MANIFEST))
+    edit(manifest)
+    (store.root / MANIFEST).write_text(manifest_text(manifest))
+
+
+def reseal(store):
+    """Make the manifest and card agree with the tables as they now are, as a build that was consistently wrong would."""
+    tables = {name: store.read_table(spec["file"]).to_pylist() for name, spec in TABLES.items()}
+
+    def edit(manifest):
+        for name, spec in TABLES.items():
+            manifest["files"][spec["file"]] = write_parquet(tables[name], store.root / spec["file"], spec["schema"], SORT_KEYS[name])
+        manifest["sources"]["census_governments"]["rows"] = len(tables["governments"])
+        try:
+            manifest["stats"] = json.loads(json.dumps(summarize(*(tables[name] for name in TABLES))))
+        except KeyError:
+            pass  # a government_type summarize has no column for; verify names it
+
+    edit_manifest(store, edit)
+    (store.root / CARD).write_text(render(json.loads(store.read_text(MANIFEST))))
+
+
+def row(rows, **match):
+    return next(r for r in rows if all(r[key] == value for key, value in match.items()))
+
+
+def test_a_clean_build_has_no_problems(published):
+    store, manifest = published
+    report = verify(store, fetcher=FakeFetcher(), stated_rows=lambda: manifest["sources"]["locus"]["rows"])
+    assert report == {"rows": ROWS, "org02_counts_compared": 312, "locus_stated_rows": manifest["sources"]["locus"]["rows"], "ny_index_state_records": 14, "tribes_notice_entries": 19, "nfip_snapshot": {"same_file": True, "rows": 25}, "nfip_report": {"same_file": True, "rows": 25}, "problems": []}
+
+
+@pytest.mark.parametrize("edit, expected", [
+    (lambda rows: rows.append(dict(rows[0])), "governments: duplicate census_id: 1 (100001)"),
+    (lambda rows: rows[0].update(census_id="10001"), "governments: census_id null or not 6 digits: 1 ('10001')"),
+    (lambda rows: rows[0].update(government_type="tribal"), "governments: government_type values ['tribal'] are not the Census's five types"),
+    (lambda rows: rows[0].update(state="AK"), "governments: state does not match state_fips: 1 (100001)"),
+    (lambda rows: row(rows, census_id="100117").update(fips_place="62328"), "governments: fips_place set for a district or missing for a general-purpose government: 1 (100117)"),
+])
+def test_each_planted_governments_defect_is_named_even_in_a_consistent_manifest(published, edit, expected):
+    store, _ = published
+    edit_table(store, "governments", edit)
+    reseal(store)
+    assert expected in check(store)
+
+
+def test_a_government_dropped_consistently_is_caught_only_by_cg2200org02(published):
+    store, _ = published
+    edit_table(store, "governments", lambda rows: rows.remove(row(rows, census_id="162028")))
+    reseal(store)
+    assert check(store, fetcher=False) == [], "files, manifest, stats and card all agree with each other"
+    assert check(store) == ["CG2200ORG02: US county: 4 rows, CG2200ORG02 says 5", "CG2200ORG02: US total: 49 rows, CG2200ORG02 says 50",
+                            "CG2200ORG02: ID county: 0 rows, CG2200ORG02 says 1", "CG2200ORG02: ID total: 0 rows, CG2200ORG02 says 1"]
+
+
+@pytest.mark.parametrize("edit, expected", [
+    (lambda rows: row(rows, locus_name="prattville").update(census_id="999999"), "locus_crosswalk: al/prattville names census_id 999999, which is not in governments"),
+    (lambda rows: rows.append(dict(rows[0])), "locus_crosswalk: jurisdictions listed more than once: 1 (ak/cities/anchorage)"),
+    (lambda rows: row(rows, locus_name="prattville").update(census_id=None), "locus_crosswalk: al/prattville is name with census_id None"),
+    (lambda rows: row(rows, locus_name="howard").update(census_id="127039"), "locus_crosswalk: ks/howard is ambiguous with census_id '127039'"),
+    (lambda rows: row(rows, locus_name="prattville").update(candidates=["100019"]), "locus_crosswalk: al/prattville is name with candidates ['100019']"),
+    (lambda rows: row(rows, locus_name="barre").update(census_id="114404", candidates=["135964"]), "locus_crosswalk: vt/barre's census_id 114404 is not among its candidates"),
+    (lambda rows: row(rows, locus_name="barre").update(match="guess"), "locus_crosswalk: match values ['guess'] are not among"),
+    (lambda rows: row(rows, locus_name="barre").update(census_id="100019"), "locus_crosswalk: census_id matched by more than one jurisdiction: 1 (100019)"),
+    (lambda rows: row(rows, locus_name="barre").update(locus_rows=0), "locus_crosswalk: vt/barre has locus_rows 0"),
+])
+def test_each_planted_crosswalk_defect_is_named_even_in_a_consistent_manifest(published, edit, expected):
+    store, _ = published
+    edit_table(store, "locus_crosswalk", edit)
+    reseal(store)
+    assert any(problem.startswith(expected) for problem in check(store)), check(store)
+
+
+def matched(rows, kind="Town"):
+    return next(r for r in rows if r["census_id"] and r["municipality_type"] == kind)
+
+
+def unmatched(rows):
+    return next(r for r in rows if r["match"] == "unmatched")
+
+
+@pytest.mark.parametrize("edit, expected", [
+    (lambda rows: rows.append(dict(rows[0])), "ny_local_laws: duplicate asset_id: 1 ("),
+    (lambda rows: rows[0].update(asset_id=None), "ny_local_laws: 1 rows without asset_id"),
+    (lambda rows: rows.pop(), f"ny_local_laws: {NY_SAMPLE['total'] - 1:,} rows; the API counted {NY_SAMPLE['total']} filings at the harvest"),
+    (lambda rows: rows.pop(), "ny_local_laws: filings by year differ from the API's counts at the harvest in 1 ("),
+    (lambda rows: rows[0].update(share_url=rows[0]["share_url"] + "&Signature=abc&Expires=1"), "ny_local_laws: share_url is not the Department's public link: 1 ("),
+    (lambda rows: rows[0].update(share_url=None), "ny_local_laws: share_url is not the Department's public link: 1 ("),
+    (lambda rows: rows[0].update(match="guess"), "ny_local_laws: match values ['guess'] are not among"),
+    (lambda rows: matched(rows).update(census_id=None), "ny_local_laws: census_id, match and candidates disagree: 1 ("),
+    (lambda rows: unmatched(rows).update(match="ambiguous"), "ny_local_laws: census_id, match and candidates disagree: 1 ("),
+    (lambda rows: unmatched(rows).update(census_id="170895"), "ny_local_laws: census_id, match and candidates disagree: 1 ("),
+    (lambda rows: matched(rows).update(candidates=["170895"]), "ny_local_laws: census_id, match and candidates disagree: 1 ("),
+    (lambda rows: matched(rows).update(census_id="100001"), "ny_local_laws: census_id is not a New York government in governments: 1 ("),
+    (lambda rows: matched(rows, "Town").update(census_id="109507"), "ny_local_laws: census_id's Census title is not the one municipality_type gives: 1 ("),
+    (lambda rows: row(rows, municipality_type="Town", municipality_name="BRIGHTON").update(census_id="170831", match="name"), "ny_local_laws: census_id, match and candidates are not what the matching rules give the row's type and name: 1 ("),
+])
+def test_each_planted_ny_defect_is_named_even_in_a_consistent_manifest(published, edit, expected):
+    store, _ = published
+    edit_table(store, "ny_local_laws", edit)
+    reseal(store)
+    assert any(problem.startswith(expected) for problem in check(store)), check(store)
+
+
+def test_ny_counts_that_are_not_the_api_s_are_named(published):
+    store, manifest = published
+    years = manifest["sources"]["ny_local_laws"]["years"]
+    busy = [year for year, n in years.items() if n]
+    moved = dict(years, **{busy[0]: years[busy[0]] - 1, busy[1]: years[busy[1]] + 1})
+    edit_manifest(store, lambda manifest: manifest["sources"]["ny_local_laws"].update(years=moved))
+    assert check(store) == [f"ny_local_laws: filings by year differ from the API's counts at the harvest in 2 ({busy[0]}, {busy[1]})"]
+    total = NY_SAMPLE["total"]
+    edit_manifest(store, lambda manifest: manifest["sources"]["ny_local_laws"].update(years=years, total=total + 1))
+    problems = check(store)
+    assert f"ny_local_laws: the manifest's API counts by year add to {total:,}, not its total {total + 1}" in problems
+    assert f"ny_local_laws: {total:,} rows; the API counted {total + 1} filings at the harvest" in problems
+
+
+def test_a_file_that_is_not_the_manifest_s_is_named(published):
+    store, manifest = published
+    rows = manifest["sources"]["locus"]["rows"]
+    edit_table(store, "locus_crosswalk", lambda crosswalk: row(crosswalk, locus_name="barre").update(locus_rows=4))
+    problems = check(store, stated=rows)
+    assert problems[0].startswith(f"{CROSSWALK} has SHA-256 ")
+    assert f"locus_crosswalk: {rows + 1} LOCUS rows, the manifest says {rows}" in problems and f"locus_crosswalk: {rows + 1} LOCUS rows, LOCUS's card states {rows}" in problems
+    assert "the manifest's stats differ from the tables' in ['locus']" in problems
+
+
+def test_the_live_locus_row_count_is_compared(published):
+    store, manifest = published
+    rows = manifest["sources"]["locus"]["rows"]
+    assert check(store, stated=rows + 1) == [f"locus_crosswalk: {rows:,} LOCUS rows, LOCUS's card states {rows + 1:,}"]
+
+
+@pytest.mark.parametrize("plant, expected", [
+    (lambda store: (store.root / "data/extra.parquet").write_bytes(b"x"), ["data/extra.parquet is in the repo but not in the manifest"]),
+    (lambda store: (store.root / CARD).write_text(store.read_text(CARD) + "\nedited by hand\n"), [f"{CARD} is not the card this code renders from the manifest; run `python -m local_laws card`"]),
+    (lambda store: (store.root / MANIFEST).unlink(), ["no manifest.json"]),
+    (lambda store: (store.root / MANIFEST).write_text("{"), ["manifest.json is not JSON: "]),
+])
+def test_each_planted_repo_defect_is_the_only_problem(published, plant, expected):
+    store, _ = published
+    plant(store)
+    problems = check(store)
+    assert len(problems) == len(expected) and all(problem.startswith(start) for problem, start in zip(problems, expected)), problems
+
+
+def test_a_missing_or_unreadable_table_is_named(published):
+    store, _ = published
+    (store.root / CROSSWALK).unlink()
+    (store.root / GOVERNMENTS).write_bytes(b"PAR1 truncated")
+    problems = check(store)
+    assert f"{CROSSWALK} is in the manifest but not in the repo" in problems
+    assert any(problem.startswith(f"governments: {GOVERNMENTS} cannot be read as parquet") for problem in problems), problems
+
+
+def test_a_manifest_that_disagrees_with_its_files_is_named(published):
+    store, _ = published
+    edit_manifest(store, lambda manifest: manifest["files"][GOVERNMENTS].update(rows=51))
+    assert "governments: 50 rows, the manifest says 51" in check(store)
+    edit_manifest(store, lambda manifest: manifest["stats"].update(governments=51))
+    assert "the manifest's stats differ from the tables' in ['governments']" in check(store)
+
+
+def test_a_table_whose_schema_drifted_is_named(published):
+    store, _ = published
+    rows = store.read_table(GOVERNMENTS).to_pylist()
+    schema = pa.schema([field.with_type(pa.string()) if field.name == "population" else field for field in TABLES["governments"]["schema"]])
+    pq.write_table(pa.Table.from_pylist([dict(r, population=str(r["population"])) for r in rows], schema=schema), store.root / GOVERNMENTS)
+    assert any(problem.startswith("governments: schema ") and problem.endswith("is not the documented one") for problem in check(store))
+
+
+def test_an_extra_column_in_a_consistent_build_is_one_problem_not_one_per_crosswalk_row(published):
+    store, _ = published
+    table = store.read_table(GOVERNMENTS)
+    pq.write_table(table.append_column("mailing_city", pa.array(["X"] * table.num_rows, pa.string())), store.root / GOVERNMENTS)
+    edit_manifest(store, lambda manifest: manifest["files"][GOVERNMENTS].update(sha256=sha256_file(store.root / GOVERNMENTS), bytes=(store.root / GOVERNMENTS).stat().st_size))
+    (store.root / CARD).write_text(render(json.loads(store.read_text(MANIFEST))))
+    problems = check(store)
+    assert len(problems) == 1 and problems[0].startswith("governments: schema ") and "mailing_city" in problems[0], problems
+
+
+def test_an_undocumented_column_is_named(published, monkeypatch):
+    store, _ = published
+    docs = dict(TABLES["governments"]["docs"])
+    del docs["is_active"]
+    monkeypatch.setitem(TABLES["governments"], "docs", docs)
+    problems = check(store)
+    assert "governments: documented columns differ from the schema's: ['is_active']" in problems
+    assert "the card cannot be rendered from the manifest: KeyError: 'is_active'" in problems
+
+
+def test_a_manifest_built_from_other_pins_is_named(published, monkeypatch):
+    store, _ = published
+    monkeypatch.setattr(locus, "REVISION", "f" * 40)
+    monkeypatch.setattr(census, "GOVT_UNITS_SHA256", "e" * 64)
+    problems = check(store)
+    assert f"the manifest's locus revision is '4cee954ca8ad8e31cb0502dff6682c87b74b4302'; this code pins {'f' * 40}" in problems
+    assert any(problem.startswith("the manifest's census_governments sha256 is ") and problem.endswith("e" * 64) for problem in problems)
+
+
+def test_a_changed_cg2200org02_stops_verify(published):
+    store, _ = published
+    with pytest.raises(SourceChanged, match="not the pinned"):
+        verify(store, fetcher=FakeFetcher({census.ORG02_URL: ORG02 + b"x"}))
+
+
+def index_row(rows, number):
+    return next(r for r in rows if r["index_row"] == number)
+
+
+def swap_positions(rows):
+    first, second = index_row(rows, 2), index_row(rows, 3)
+    first["index_row"], second["index_row"] = 3, 2
+
+
+@pytest.mark.parametrize("edit, expected", [
+    (lambda rows: rows.append(dict(rows[0])), ["ny_local_law_index: index_row is not 1 to 15, once each; repeated: 1 (1)", "ny_local_law_index: 1 rows are not records in the State's LGSSLAWS, and 0 records are not rows"]),
+    (lambda rows: rows.pop(), ["ny_local_law_index: 13 rows; the manifest's source gives rows 14", "ny_local_law_index: 13 rows; the manifest's source gives state_records 14", "ny_local_law_index: export lines not in the table: 1 (14)"]),
+    (lambda rows: index_row(rows, 2).update(title="Partial tax exemption"), ["ny_local_law_index: rows that are not the release's export line at their index_row: 1 (2)"]),
+    (lambda rows: index_row(rows, 2).update(pages=2), ["ny_local_law_index: rows that are not the release's export line at their index_row: 1 (2)", "ny_local_law_index: 1 rows are not records in the State's LGSSLAWS, and 1 records are not rows"]),
+    (swap_positions, ["ny_local_law_index: rows that are not the release's export line at their index_row: 2 (2, 3)"]),
+    (lambda rows: index_row(rows, 2).update(match="guess"), ["ny_local_law_index: match values ['guess'] are not among"]),
+    (lambda rows: index_row(rows, 2).update(census_id=None), ["ny_local_law_index: census_id, match and candidates disagree: 1 (2)"]),
+    (lambda rows: index_row(rows, 7).update(census_id="170831", match="name"), ["ny_local_law_index: census_id, match and candidates are not what the matching rules give the row's type and name: 1 (7)"]),
+    (lambda rows: index_row(rows, 2).update(census_id="100001"), ["ny_local_law_index: census_id is not a New York government in governments: 1 (2)"]),
+    (lambda rows: index_row(rows, 5).update(census_id="109507"), ["ny_local_law_index: census_id's Census title is not the one municipality_type gives: 1 (5)"]),
+])
+def test_each_planted_index_defect_is_named_even_in_a_consistent_manifest(published, edit, expected):
+    store, _ = published
+    edit_table(store, "ny_local_law_index", edit)
+    reseal(store)
+    problems = check(store)
+    assert all(any(problem.startswith(start) for problem in problems) for start in expected), problems
+
+
+def test_a_changed_index_release_stops_verify_and_other_pins_are_named(published, monkeypatch):
+    store, _ = published
+    with pytest.raises(SourceChanged, match="not the pinned"):
+        verify(store, fetcher=FakeFetcher({nyindex.URL: NY_INDEX + b"x"}))
+    monkeypatch.setattr(nyindex, "SHA256", "d" * 64)
+    assert check(store, fetcher=False) == [f"the manifest's ny_local_law_index sha256 is '{sha256(NY_INDEX)}'; this code pins {'d' * 64}"]
+
+
+def list_row(rows, number):
+    return next(r for r in rows if r["list_row"] == number)
+
+
+def swap_list_rows(rows):
+    first, second = list_row(rows, 2), list_row(rows, 3)
+    first["list_row"], second["list_row"] = 3, 2
+
+
+TRIBES = "federally_recognized_tribes"
+
+
+@pytest.mark.parametrize("edit, expected", [
+    (lambda rows: rows.append(dict(list_row(rows, 1))), [f"{TRIBES}: list_row is not 1 to 20, once each; repeated: 1 (1)", f"{TRIBES}: earlier entries continued by more than one row: 1 (contiguous_48/Absentee-Shawnee Tribe of Indians of Oklahoma)", f"{TRIBES}: 20 rows; the manifest's source gives rows 19", f"{TRIBES}: 20 rows; the manifest's source gives entries 19"]),
+    (lambda rows: rows.remove(list_row(rows, 19)), [f"{TRIBES}: 18 rows; the manifest's source gives rows 19", f"{TRIBES}: 18 rows; the manifest's source gives entries 19", f"{TRIBES}: entries of the notice not in the table: 1 (19)"]),
+    (lambda rows: rows.remove(list_row(rows, 12)), [f"{TRIBES}: list_row is not 1 to 18, once each", f"{TRIBES}: entries of the notice not in the table: 1 (12)"]),
+    (lambda rows: list_row(rows, 5).update(name="Kiowa"), [f"{TRIBES}: name is not the entry's text before its first parenthesis: 1 (5)", f"{TRIBES}: rows that are not the notice's entry at their list_row: 1 (5)"]),
+    (lambda rows: list_row(rows, 14).update(entry="Native Village of Venetie Tribal Government"), [f"{TRIBES}: rows that are not the notice's entry at their list_row: 1 (14)"]),
+    (lambda rows: list_row(rows, 12).update(list="contiguous_48"), [f"{TRIBES}: the lists are not in the notice's order, contiguous_48 then alaska", f"{TRIBES}: rows that are not the notice's entry at their list_row: 1 (12)"]),
+    (lambda rows: list_row(rows, 2).update(list="hawaii"), [f"{TRIBES}: list values ['hawaii'] are not among ['contiguous_48', 'alaska']"]),
+    (lambda rows: list_row(rows, 13).update(previous_entry=None), [f"{TRIBES}: 2 rows continue no earlier entry; the stated count went from 16 to 17", f"{TRIBES}: 17 rows continue an earlier entry; the manifest's source gives the earlier notice 18 entries", f"{TRIBES}: rows that are not the notice's entry at their list_row: 1 (13)"]),
+    (lambda rows: list_row(rows, 13).update(previous_entry="Native Village of Atqasuk"), [f"{TRIBES}: earlier entries continued by more than one row: 1 (alaska/Native Village of Atqasuk)", f"{TRIBES}: rows that are not the notice's entry at their list_row: 1 (13)"]),
+    (swap_list_rows, [f"{TRIBES}: rows that are not the notice's entry at their list_row: 2 (2, 3)"]),
+])
+def test_each_planted_tribes_defect_is_named_even_in_a_consistent_manifest(published, edit, expected):
+    store, _ = published
+    edit_table(store, TRIBES, edit)
+    reseal(store)
+    problems = check(store)
+    assert all(any(problem.startswith(start) for problem in problems) for start in expected), problems
+
+
+@pytest.mark.parametrize("field, value, expected", [
+    ("stated", 18, [f"{TRIBES}: 1 rows continue no earlier entry; the stated count went from 16 to 18", f"{TRIBES}: the manifest's source differs from the notices in ['stated']"]),
+    ("previous_entries", 17, [f"{TRIBES}: 18 rows continue an earlier entry; the manifest's source gives the earlier notice 17 entries", f"{TRIBES}: the manifest's source differs from the notices in ['previous_entries']"]),
+    ("entries", 18, [f"{TRIBES}: 19 rows; the manifest's source gives entries 18", f"{TRIBES}: the manifest's source differs from the notices in ['entries']"]),
+    ("previous_stated", None, [f"{TRIBES}: the manifest's source gives counts ", f"{TRIBES}: the manifest's source differs from the notices in ['previous_stated']", "the card cannot be rendered from the manifest: TypeError"]),
+])
+def test_manifest_counts_that_are_not_the_notices_are_named(published, field, value, expected):
+    store, _ = published
+    edit_manifest(store, lambda manifest: manifest["sources"][TRIBES].update({field: value}))
+    if value is not None:
+        (store.root / CARD).write_text(render(json.loads(store.read_text(MANIFEST))))
+    problems = check(store)
+    assert all(any(problem.startswith(start) for problem in problems) for start in expected), problems
+
+
+def test_a_changed_notice_stops_verify_and_other_pins_are_named(published, monkeypatch):
+    store, _ = published
+    for url, data in ((tribes.NOTICE["url"], TRIBES_NOTICE), (tribes.PREVIOUS["url"], TRIBES_PREVIOUS)):
+        with pytest.raises(SourceChanged, match="not the pinned"):
+            verify(store, fetcher=FakeFetcher({url: data + b"x"}))
+    monkeypatch.setitem(tribes.NOTICE, "sha256", "d" * 64)
+    monkeypatch.setitem(tribes.PREVIOUS, "sha256", "c" * 64)
+    assert check(store, fetcher=False) == [f"the manifest's {TRIBES} sha256 is '{sha256(TRIBES_NOTICE)}'; this code pins {'d' * 64}", f"the manifest's {TRIBES} previous_sha256 is '{sha256(TRIBES_PREVIOUS)}'; this code pins {'c' * 64}"]
+
+
+NFIP = "nfip_communities"
+
+
+def community(rows, cid):
+    return next(r for r in rows if r["cid"] == cid)
+
+
+@pytest.mark.parametrize("edit, expected", [
+    (lambda rows: rows.append(dict(community(rows, "010224"))), [f"{NFIP}: duplicate cid: 1 (010224)", f"{NFIP}: duplicate report_row: 1 (7)", f"{NFIP}: the table and the manifest's source disagree, (table, manifest): {{'rows': (26, 25), 'participating': (21, 20), 'api in_report': (26, 25)}}"]),
+    (lambda rows: rows.remove(community(rows, "010224")), [f"{NFIP}: the table and the manifest's source disagree, (table, manifest): {{'rows': (24, 25), 'participating': (19, 20), 'api in_report': (24, 25)}}", f"{NFIP}: communities in the report not in the table: 1 (010224)"]),
+    (lambda rows: community(rows, "010116").update(cid="01011"), [f"{NFIP}: cid null or not 6 digits: 1 ('01011')", f"{NFIP}: rows that are not the report's community at their cid: 1 (01011)", f"{NFIP}: communities in the report not in the table: 1 (010116)"]),
+    (lambda rows: community(rows, "010116").update(state="GA"), [f"{NFIP}: state is not the one whose FIPS code begins cid: 1 (010116)", f"{NFIP}: rows that are not the report's community at their cid: 1 (010116)"]),
+    (lambda rows: community(rows, "010224").update(participating=False), [f"{NFIP}: a date or note of entry for a community not participating, or of sanction for one participating: 1 (010224)", f"{NFIP}: communities not participating come before participating ones", f"{NFIP}: the table and the manifest's source disagree, (table, manifest): {{'participating': (19, 20)}}", f"{NFIP}: rows that are not the report's community at their cid: 1 (010224)"]),
+    (lambda rows: community(rows, "010214").update(status_note="E"), [f"{NFIP}: a date or note of entry for a community not participating, or of sanction for one participating: 1 (010214)", f"{NFIP}: rows that are not the report's community at their cid: 1 (010214)"]),
+    (lambda rows: community(rows, "010095").update(report_row=1), [f"{NFIP}: communities not participating come before participating ones", f"{NFIP}: rows that are not the report's community at their cid: 1 (010095)"]),
+    (lambda rows: community(rows, "120425").update(notes=[]), [f"{NFIP}: the table and the manifest's source disagree, (table, manifest): {{'with_notes': (9, 10)}}", f"{NFIP}: rows that are not the report's community at their cid: 1 (120425)"]),
+    (lambda rows: community(rows, "380146").update(current_map_date=None), [f"{NFIP}: the table and the manifest's source disagree, (table, manifest): {{'after_retrieval': (5, 6)}}", f"{NFIP}: rows that are not the report's community at their cid: 1 (380146)"]),
+])
+def test_each_planted_nfip_defect_is_named_even_in_a_consistent_manifest(published, edit, expected):
+    store, _ = published
+    edit_table(store, NFIP, edit)
+    reseal(store)
+    problems = check(store)
+    assert all(any(problem.startswith(start) for problem in problems) for start in expected), problems
+
+
+def test_a_value_only_the_report_holds_is_caught_only_by_reading_the_report_or_its_stored_copy(published):
+    store, _ = published
+    edit_table(store, NFIP, lambda rows: community(rows, "010116").update(crs_class=6))
+    reseal(store)
+    assert check(store) == [f"{NFIP}: rows that are not the stored report's community at their cid: 1 (010116)", f"{NFIP}: rows that are not the report's community at their cid: 1 (010116)"]
+    assert check(store, fetcher=False) == [f"{NFIP}: rows that are not the stored report's community at their cid: 1 (010116)"], "the stored copy needs no network"
+    edit_manifest(store, lambda manifest: manifest["files"].pop(nfip.SNAPSHOT))
+    (store.root / nfip.SNAPSHOT).unlink()
+    (store.root / CARD).write_text(render(json.loads(store.read_text(MANIFEST))))
+    assert check(store, fetcher=False) == [], "without the stored copy, only fema.gov holds the value"
+
+
+def store_snapshot(store, data, relist=True):
+    """Replace the stored FEMA files with data, and with relist the manifest's SHA-256 and size for them, as a build that was consistently wrong would."""
+    (store.root / nfip.SNAPSHOT).write_bytes(data)
+    if relist:
+        edit_manifest(store, lambda manifest: manifest["files"][nfip.SNAPSHOT].update(bytes=len(data), sha256=sha256(data)))
+
+
+@pytest.mark.parametrize("data, relist, expected", [
+    (lambda: nfip.snapshot_bytes(nfip_snapshot() | {"csv": NFIP_CSV + b"\n"}), True, [f"{nfip.SNAPSHOT} is not the reading the manifest's nfip_communities source records: its ['nation.csv'] differ"]),
+    (lambda: nfip.snapshot_bytes(nfip_snapshot() | {"api": NFIP_API + b"\n"}), True, [f"{nfip.SNAPSHOT} is not the reading the manifest's nfip_communities source records: its ['NfipCommunityStatusBook.parquet'] differ"]),
+    (lambda: nfip.snapshot_bytes(nfip_snapshot() | {"retrieved_at": "2026-09-27T08:18:00Z", "api_retrieved_at": "2026-09-27T08:23:00Z"}), True, [f"{nfip.SNAPSHOT} is not the reading the manifest's nfip_communities source records: its ['api_retrieved_at', 'retrieved_at'] differ"]),
+    (lambda: b"not a zip", True, [f"{nfip.SNAPSHOT} cannot be read as a snapshot: BadZipFile: File is not a zip file"]),
+    (lambda: rezipped(nfip_snapshot()), False, [f"{nfip.SNAPSHOT} has SHA-256"]),
+])
+def test_stored_fema_files_that_are_not_the_manifests_reading_are_named(published, data, relist, expected):
+    store, _ = published
+    store_snapshot(store, data(), relist)
+    problems = check(store)
+    assert len(problems) == len(expected) and all(problem.startswith(start) for problem, start in zip(problems, expected)), problems
+
+
+def test_stored_fema_files_missing_from_the_repo_are_named(published):
+    store, _ = published
+    (store.root / nfip.SNAPSHOT).unlink()
+    assert check(store) == [f"{nfip.SNAPSHOT} is in the manifest but not in the repo"]
+
+
+@pytest.mark.parametrize("refusal", [
+    lambda: httpx.HTTPStatusError("forbidden", request=httpx.Request("GET", nfip.CSV_URL), response=httpx.Response(403, request=httpx.Request("GET", nfip.CSV_URL))),
+    lambda: Blocked("bot challenge at www.fema.gov/cis/nation.csv"),
+    lambda: Unavailable("HTTP 503 from www.fema.gov/cis/nation.csv"),
+])
+def test_fema_refusing_verify_is_reported_not_a_problem(published, refusal):
+    store, manifest = published
+    error = refusal()
+    report = verify(store, fetcher=FakeFetcher({nfip.CSV_URL: error}), stated_rows=lambda: manifest["sources"]["locus"]["rows"])
+    assert (report["nfip_report"], report["nfip_snapshot"], report["problems"]) == ({"same_file": None, "unreadable": f"{type(error).__name__}: {error}"}, {"same_file": True, "rows": 25}, [])
+
+
+def test_a_report_fema_has_since_regenerated_is_reported_not_a_problem(published):
+    store, manifest = published
+    report = verify(store, fetcher=FakeFetcher({nfip.CSV_URL: NFIP_CSV + b"\n"}), stated_rows=lambda: manifest["sources"]["locus"]["rows"])
+    assert (report["nfip_report"], report["problems"]) == ({"same_file": False}, [])
+
+
+@pytest.mark.parametrize("edit, expected", [
+    (lambda source: source.update(rows=24), [f"{NFIP}: the table and the manifest's source disagree, (table, manifest): {{'rows': (25, 24)}}"]),
+    (lambda source: source["api"].update(in_report=24), [f"{NFIP}: the table and the manifest's source disagree, (table, manifest): {{'api in_report': (25, 24)}}"]),
+    (lambda source: source["after_retrieval"].pop(2), [f"{NFIP}: the table and the manifest's source disagree, (table, manifest): {{'after_retrieval': (6, 5)}}"]),
+    (lambda source: source.update(retrieved_at="2026-10-30T08:18:00Z"), [f"{NFIP}: the table and the manifest's source disagree, (table, manifest): {{'after_retrieval': (3, 6)}}",
+                                                                          f"{nfip.SNAPSHOT} is not the reading the manifest's nfip_communities source records: its ['retrieved_at'] differ"]),
+])
+def test_nfip_counts_in_the_manifest_that_are_not_the_tables_are_named(published, edit, expected):
+    store, _ = published
+    edit_manifest(store, lambda manifest: edit(manifest["sources"][NFIP]))
+    (store.root / CARD).write_text(render(json.loads(store.read_text(MANIFEST))))
+    assert check(store) == expected

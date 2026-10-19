@@ -1,0 +1,19 @@
+__pycache__/
+.pytest_cache/
+.venv
+*.egg-info/
+build/
+dist/
+/action-scratch/
+/action-smoke/
+/pins.json
+/probe.json
+/run.json
+/verify.json
+
+# Local environment files can hold credentials; committed templates stay tracked.
+.env
+.env.*
+!.env.example
+!.env.template
+!.env.sample

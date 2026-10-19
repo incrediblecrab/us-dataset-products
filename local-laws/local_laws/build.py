@@ -1,0 +1,186 @@
+"""One build: every source downloaded at its pinned version, or read at the time of the build where it has no versions, and checked against the others; then the tables, the manifest that describes them and the card."""
+
+import datetime
+import json
+import subprocess
+import tempfile
+from collections import Counter
+from pathlib import Path
+
+from . import __version__, census, locus, nfip, nyindex, nylaws, schema, tribes
+from .card import render
+from .census import SourceChanged
+from .store import CARD, MANIFEST, sha256_file, write_parquet
+
+SORT_KEYS = {
+    "governments": lambda row: row["census_id"],
+    "locus_crosswalk": lambda row: (row["locus_state"], row["locus_jurisdiction_type"], row["locus_name"]),
+    # The Department names new PDFs in increasing order, so a rebuild with new filings changes only the file's last chunks.
+    "ny_local_laws": lambda row: (row["filename"], row["asset_id"]),
+    "ny_local_law_index": lambda row: row["index_row"],
+    "federally_recognized_tribes": lambda row: row["list_row"],
+    "nfip_communities": lambda row: row["report_row"],
+}
+# Manifest keys that change with every build even when nothing they describe does; a build that differs from the published one only in these is not committed.
+VOLATILE = ("built_at", "code")
+
+
+def code_version():
+    """The pipeline's version, its git commit and whether the working tree had changes not yet committed."""
+    root = Path(__file__).resolve().parent.parent
+
+    def git(*args):
+        try:
+            return subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True, check=True).stdout.strip()
+        except (OSError, subprocess.CalledProcessError):
+            return None
+
+    commit = git("rev-parse", "HEAD")
+    status = git("status", "--porcelain")
+    return {"version": __version__, "commit": commit, "dirty": None if status is None else bool(status)}
+
+
+def summarize(governments, crosswalk, ny, index, recognized, communities):
+    """The counts the card shows. verify recomputes them from the published tables, so they are only ever what the data holds."""
+    matched = {row["census_id"] for row in crosswalk if row["census_id"]}
+    types = {}
+    for kind in census.TYPES:
+        rows = [row for row in governments if row["government_type"] == kind]
+        entry = {
+            "governments": len(rows),
+            "active": sum(1 for row in rows if row["is_active"]),
+            "with_web_address": sum(1 for row in rows if row["web_address"]),
+            "in_locus": sum(1 for row in rows if row["census_id"] in matched),
+        }
+        if kind in locus.GENERAL_PURPOSE:
+            entry["population"] = sum(row["population"] or 0 for row in rows)
+            entry["in_locus_population"] = sum(row["population"] or 0 for row in rows if row["census_id"] in matched)
+            entry["population_years"] = {"none" if year is None else str(year): n for year, n in sorted(Counter(row["population_year"] for row in rows).items(), key=lambda item: -1 if item[0] is None else item[0])}
+        types[kind] = entry
+    states = {}
+    for row in governments:
+        entry = states.setdefault(row["state"], dict.fromkeys(census.TYPES, 0) | {"in_locus": 0})
+        entry[row["government_type"]] += 1
+        entry["in_locus"] += int(row["census_id"] in matched)
+    matches = {}
+    for match in locus.MATCHES:
+        rows = [row for row in crosswalk if row["match"] == match]
+        matches[match] = {
+            "jurisdictions": len(rows),
+            "rows": sum(row["locus_rows"] for row in rows),
+            "text_fits": sum(1 for row in rows if row["text_fits"] is True),
+            "text_differs": sum(1 for row in rows if row["text_fits"] is False),
+            "text_unchecked": sum(1 for row in rows if row["text_fits"] is None),
+        }
+    def names(rows):
+        return sorted(f"{row['locus_state']}/{row['locus_name']}" for row in rows)
+
+    located = [row for row in crosswalk if row["census_id"]]
+    return {
+        "governments": len(governments),
+        "types": types,
+        "states": dict(sorted(states.items())),
+        "locus": {
+            "jurisdictions": len(crosswalk),
+            "rows": sum(row["locus_rows"] for row in crosswalk),
+            "matched": len(located),
+            "matches": matches,
+            "matched_few_mentions": sum(1 for row in located if row["text_fits"] is None and row["text_mentions"] < locus.MIN_MENTIONS),
+            "matched_without_mentions": names(row for row in located if row["text_mentions"] == 0),
+            "text_differs": names(row for row in crosswalk if row["text_fits"] is False),
+            "ambiguous": names(row for row in crosswalk if row["match"] == "ambiguous"),
+            "unmatched": names(row for row in crosswalk if row["match"] == "unmatched"),
+        },
+        "ny": nylaws.stats(ny, governments),
+        "ny_index": nyindex.stats(index, governments, ny),
+        "tribes": tribes.stats(recognized),
+        "nfip": nfip.stats(communities),
+    }
+
+
+def fetch_census(fetcher):
+    """The two Census downloads, each checked against its pinned SHA-256."""
+    units = fetcher.get(census.GOVT_UNITS_URL)
+    census.check_sha256(units, census.GOVT_UNITS_SHA256, census.GOVT_UNITS_URL)
+    org02 = fetcher.get(census.ORG02_URL)
+    census.check_sha256(org02, census.ORG02_SHA256, census.ORG02_URL)
+    return units, org02
+
+
+def build(fetcher, workdir, locus_download=None, ny_snapshot=None, nfip_snapshot=None, built_at=None, code=None):
+    """Downloads and checks every source and writes the files for one commit into workdir/stage. Returns (manifest, files), files mapping repo paths to local files.
+    Raises SourceChanged, and writes nothing, if a source is not the one pinned or the sources disagree. locus_download defaults to locus.download; ny_snapshot, a snapshot from nylaws.harvest, and nfip_snapshot, one from nfip.harvest, to a new harvest."""
+    units_zip, org02_zip = fetch_census(fetcher)
+    governments, notes = census.parse_units(census.zip_member(units_zip, census.GOVT_UNITS_MEMBER))
+    org02 = census.parse_org02(census.zip_member(org02_zip, census.ORG02_MEMBER))
+    mismatches = census.compare(governments, org02)
+    if mismatches:
+        raise SourceChanged(f"{len(mismatches)} counts in CG2200ORG02 disagree with the Census file: {mismatches[:5]}")
+    Path(workdir).mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="locus-", dir=workdir) as directory:
+        paths, stated = (locus_download or locus.download)(directory)
+        crosswalk = locus.crosswalk(paths, governments)
+    read = sum(row["locus_rows"] for row in crosswalk)
+    if read != stated:
+        raise SourceChanged(f"read {read:,} LOCUS rows; its card states {stated:,}")
+    snapshot = ny_snapshot if ny_snapshot is not None else nylaws.harvest(fetcher)
+    ny = nylaws.match(nylaws.rows(snapshot), governments)
+    if len(ny) != snapshot["total"] or Counter(str(row["date_filed"].year) for row in ny) != Counter(snapshot["years"]):
+        raise SourceChanged(f"the NY snapshot holds {len(ny):,} filings; its API counts say {snapshot['total']:,}, by year {snapshot['years']}")
+    index, state_records = nyindex.read(nyindex.download(fetcher))
+    index = nyindex.match(index, governments)
+    notice, previous, recognized = tribes.load(fetcher)
+    flood = nfip_snapshot if nfip_snapshot is not None else nfip.harvest(fetcher)
+    communities = nfip.rows(flood["csv"])
+    reconciled = nfip.reconcile(communities, flood["api"])
+    stage = Path(workdir) / "stage"
+    files, entries = {}, {}
+    for name, rows in (("governments", governments), ("locus_crosswalk", crosswalk), ("ny_local_laws", ny), ("ny_local_law_index", index), ("federally_recognized_tribes", recognized), ("nfip_communities", communities)):
+        spec = schema.TABLES[name]
+        local = stage / spec["file"]
+        entries[spec["file"]] = write_parquet(rows, local, spec["schema"], SORT_KEYS[name])
+        files[spec["file"]] = local
+    local = stage / nfip.SNAPSHOT
+    local.parent.mkdir(parents=True, exist_ok=True)
+    nfip.save(flood, local)
+    entries[nfip.SNAPSHOT] = {"bytes": local.stat().st_size, "sha256": sha256_file(local)}
+    files[nfip.SNAPSHOT] = local
+    manifest = {
+        "built_at": built_at or datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "code": code or code_version(),
+        "sources": {
+            "census_governments": {"url": census.GOVT_UNITS_URL, "sha256": census.GOVT_UNITS_SHA256, "rows": len(governments), "normalization": notes},
+            "census_org02": {"url": census.ORG02_URL, "sha256": census.ORG02_SHA256, "counts_compared": len(org02), "mismatches": 0},
+            "locus": {"repo_id": locus.REPO_ID, "revision": locus.REVISION, "license": locus.LICENSE, "rows": stated, "jurisdictions": len(crosswalk)},
+            "ny_local_laws": {key: snapshot[key] for key in ("api", "category", "started_at", "finished_at", "total", "years")} | {"app": nylaws.APP},
+            "ny_local_law_index": {"doi": nyindex.DOI, "record": nyindex.RECORD, "url": nyindex.URL, "sha256": nyindex.SHA256, "repository": nyindex.REPOSITORY, "commit": nyindex.COMMIT,
+                                   "license": nyindex.LICENSE, "rows": len(index), "state_records": state_records},
+            "federally_recognized_tribes": tribes.source(notice, previous, recognized),
+            "nfip_communities": nfip.source(flood, communities, reconciled),
+        },
+        "files": entries,
+        "stats": summarize(governments, crosswalk, ny, index, recognized, communities),
+    }
+    files[MANIFEST] = stage / MANIFEST
+    files[MANIFEST].write_text(manifest_text(manifest))
+    # The card is rendered from the manifest as written, which is what verify reads back.
+    manifest = json.loads(files[MANIFEST].read_text())
+    files[CARD] = stage / CARD
+    files[CARD].write_text(render(manifest))
+    return manifest, files
+
+
+def manifest_text(manifest):
+    return json.dumps(manifest, indent=1, sort_keys=True, ensure_ascii=False) + "\n"
+
+
+def unchanged(store, manifest):
+    """True when the store already holds this build: the same manifest apart from VOLATILE keys, and the same card."""
+    old = store.read_text(MANIFEST)
+    if old is None:
+        return False
+
+    def stable(value):
+        return {key: item for key, item in value.items() if key not in VOLATILE}
+
+    return stable(json.loads(old)) == stable(json.loads(manifest_text(manifest))) and store.read_text(CARD) == render(manifest)
