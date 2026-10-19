@@ -1,6 +1,6 @@
 # us-dataset-products
 
-This public repository holds the pipelines that keep the owner's US government datasets on Hugging Face current, one folder per source. It was assembled on October 19, 2026 by merging `incrediblecrab/us-crs-service-products`, `incrediblecrab/us-fed-research-service-products`, `incrediblecrab/us-local-laws` and `incrediblecrab/us-scotus-research-service-products`, with their histories; those repositories have since been retired.
+This public repository holds the pipelines that keep the owner's US government datasets on Hugging Face current, one folder per source. It was assembled on October 19, 2026 by merging `incrediblecrab/us-crs-service-products`, `incrediblecrab/us-fed-research-service-products`, `incrediblecrab/us-local-laws` and `incrediblecrab/us-scotus-research-service-products`, with their histories; those repositories were deleted the same day.
 
 | Folder | Source | Hugging Face datasets | Workflows |
 |---|---|---|---|
