@@ -157,6 +157,11 @@ def partition_due(ctx, entry):
     return bool(entry.get("undated")) or (newest is not None and recent(ctx, newest))
 
 
+def stale_listed(entry, units):
+    """Whether stored rows are still marked listed that this listing no longer gives, from the manifest alone. A held run keeps such rows listed yet records the partition's fingerprint, so once the hold lifts an unchanged listing would never delist them: opinions-relating-to-orders kept 28 OT2019 and 13 OT2022 files listed from the hold that ended October 16, 2026, and verify failed on every run that changed the collection."""
+    return entry.get("listed", 0) > len(set(entry.get("ids") or ()) & set(units))
+
+
 def retry_due(manifest, key, now):
     return any(f.get("partition") == key and f["attempts"] >= MAX_ATTEMPTS and later(f["at"], RETRY_AFTER_HOURS) <= now for f in manifest["failures"].values())
 
@@ -330,7 +335,7 @@ def sync_partition(ctx, pool, manifest, key, units, keep_listed=False):
     entry = manifest["partitions"].get(key) or {}
     failures = manifest["failures"]
     now = utcnow()
-    if entry.get("complete") and entry.get("fingerprint") == fingerprint(units) and not ctx.refetch and not retry_due(manifest, key, now) and not partition_due(ctx, entry):
+    if entry.get("complete") and entry.get("fingerprint") == fingerprint(units) and not ctx.refetch and not retry_due(manifest, key, now) and not partition_due(ctx, entry) and (keep_listed or not stale_listed(entry, units)):
         return True
     if not ctx.claimed:
         flush(ctx, manifest, f"{ctx.writer} takes the writer lease")

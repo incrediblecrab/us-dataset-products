@@ -203,6 +203,21 @@ def test_a_term_with_nothing_stored_is_not_held_when_its_links_go(tmp_path, born
     assert manifest["listing"]["pages"] == gone and dead.id not in manifest["failures"]
 
 
+def test_rows_a_held_run_kept_listed_are_delisted_once_the_hold_lifts(tmp_path, born_digital, scanned):
+    # relatingtoorders/05 held opinions-relating-to-orders until October 16, 2026; OT2019's page had meanwhile dropped 28 slip-opinion links, and the held run recorded the 6-file fingerprint with all 34 rows still listed, so every later run skipped the term and verify failed.
+    url, held = BASE + "test/05", BASE + "test/held"
+    kept, gone = unit("opinions/23pdf/a.pdf"), unit("opinions/23pdf/b.pdf")
+    site = FakeSite({kept.url: born_digital, gone.url: scanned})
+    run(tmp_path, FakeListing([kept, gone], pages={url: {"term": 2023, "entries": 2}, held: {"term": 2005, "entries": 5}}), site)
+    record, store = run(tmp_path, FakeListing([kept], pages={url: {"term": 2023, "entries": 1}, held: {"term": 2005, "entries": 0, "unlinked_rows": 7}}), site)
+    assert record["held"] and rows(tmp_path)[gone.id]["listed"] is True
+    record, store = run(tmp_path, FakeListing([kept], pages={url: {"term": 2023, "entries": 1}, held: {"term": 2005, "entries": 5}}), site)
+    assert not record.get("held") and record["delisted"] == 1 and record["fetched"] == 0
+    assert rows(tmp_path)[gone.id]["listed"] is False and store.read_manifest()["partitions"]["OT2023"]["listed"] == 1
+    record, _ = run(tmp_path, FakeListing([kept], pages={url: {"term": 2023, "entries": 1}, held: {"term": 2005, "entries": 5}}), site)
+    assert record["delisted"] == 0 and record["fetched"] == 0
+
+
 def test_the_next_whole_listing_undoes_one_that_took_another_terms_entries(tmp_path, born_digital, scanned):
     # On September 27, 2026 a run took orders/ordersbycircuit/22 listing the October Term 2023 orders: it delisted the 2022 files, and each 2023 file, now linked from both pages, took term 2022 from its first entry.
     old, new = unit("orders/22/a.pdf", partition="OT2022", term=2022), unit("orders/23/b.pdf", partition="OT2023", term=2023)
