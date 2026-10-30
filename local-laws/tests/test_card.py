@@ -373,3 +373,11 @@ def test_communities_without_a_program_are_mentioned_only_when_there_are_some(pu
     manifest = published[1]
     card = nfip_card(manifest, programs={"Regular": 19, "Emergency": 1, "none": 0})
     assert "Of those participating, 19 are in its Regular Program and 1 in its Emergency Program. The report marks" in card
+
+
+def test_the_card_states_its_schedule_and_ends_its_license_with_a_citation(published):
+    card = render(published[1])
+    assert "scheduled daily at 12:37 UTC" in card
+    citation = card[card.index("## Citation"):card.index("## By state")]
+    assert card.index("## License") < card.index("## Citation") and "@misc{incrediblecrabuslocallaws," in citation
+    assert "\\url{https://huggingface.co/datasets/incrediblecrab/us-local-laws}" in citation

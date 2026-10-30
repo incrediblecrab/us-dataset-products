@@ -32,6 +32,13 @@ COLUMN_DOCS = {
 }
 
 
+
+def citation_lines(repo_id, title):
+    """A BibTeX entry for the dataset, so a user can cite it."""
+    key = "incrediblecrab" + "".join(ch for ch in repo_id.split("/")[-1] if ch.isalnum())
+    return ["## Citation", "", "```bibtex", f"@misc{{{key},", "  author       = {Marquardt, Max},", f"  title        = {{{title}}},", "  publisher    = {Hugging Face},", f"  howpublished = {{\\url{{https://huggingface.co/datasets/{repo_id}}}}}", "}", "```", ""]
+
+
 def series_of(key):
     match = re.match(r"[A-Z]+", key)
     return match.group(0) if match else key
@@ -151,4 +158,5 @@ def render(manifest):
         "CRS products are works of the United States Government and are not subject to copyright in the United States ([17 U.S.C. § 105](https://www.copyright.gov/title17/92chap1.html#105)). The notice in the products themselves adds: \"However, as a CRS Report may include copyrighted images or material from a third party, you may need to obtain the permission of the copyright holder if you wish to copy or otherwise use copyrighted material.\"",
         "",
     ]
+    lines += citation_lines(REPO_ID, "US Congressional Research Service Products")
     return "\n".join(lines)

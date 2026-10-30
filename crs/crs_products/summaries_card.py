@@ -3,7 +3,7 @@
 import math
 from collections import defaultdict
 
-from .card import GITHUB, size_category
+from .card import GITHUB, citation_lines, size_category
 from .summaries import FIRST_CONGRESS, OVERLAP_HOURS, RECONCILE_HOURS, REPO_ID, RESYNC_DAYS, SCHEDULE_HOURS, SCHEMA, TYPES
 
 COLUMN_DOCS = {
@@ -121,10 +121,13 @@ def render(manifest):
         "- `title` is the one title the listing gives with the summary; a bill has several, and the listing does not say which this is.",
         "- In a second that holds more summaries than one page, every order the pipeline tries may still miss some. `manifest.json` records each such second with its count and how many were read, and each slice's `failed` is how many it lists that are not here; the status above totals both.",
         "- A summary the pipeline cannot read keeps its earlier row, if it has one, and is listed with its error under `failures` in `manifest.json`; later runs try it again.",
+        "- `id` numbers the congress without leading zeros (`93-hconres-1-00`) while partition files pad it (`093-hconres`), so ids sort as strings (1, 10, 100) within a file.",
+        "- Fields keep the API's values as given, including ones that look like artifacts of the source: `current_chamber` can be `Unknown`, `html` can hold plain text with no tags, and some early summaries begin with \"(LATEST SUMMARY)\".",
         "",
         "## License",
         "",
         "CRS summaries are works of the United States Government and are not subject to copyright in the United States ([17 U.S.C. § 105](https://www.copyright.gov/title17/92chap1.html#105)).",
         "",
     ]
+    lines += citation_lines(REPO_ID, "US Bill and Resolution Summaries (Congressional Research Service)")
     return "\n".join(lines)

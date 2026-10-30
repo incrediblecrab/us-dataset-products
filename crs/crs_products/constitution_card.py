@@ -1,6 +1,6 @@
 """Renders the Constitution Annotated dataset's card from its manifest alone, like card.py for the products."""
 
-from .card import GITHUB, size_category
+from .card import GITHUB, citation_lines, size_category
 from .constitution import REPO_ID, SCHEMA
 from .pipeline import MAX_ATTEMPTS, RETRY_AFTER_HOURS, TEXT_RETRY_HOURS
 
@@ -108,4 +108,5 @@ def render(manifest):
         "The Constitution Annotated is a work of the United States Government and is not subject to copyright in the United States ([17 U.S.C. § 105](https://www.copyright.gov/title17/92chap1.html#105)).",
         "",
     ]
+    lines += citation_lines(REPO_ID, "US Constitution Annotated (Congressional Research Service)")
     return "\n".join(lines)

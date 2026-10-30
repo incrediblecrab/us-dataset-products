@@ -236,3 +236,12 @@ def test_a_category_card_before_any_run_has_no_configs():
     manifests = {name: new_manifest(c) for name, c in COLLECTIONS.items() if c.category == "opinions"}
     meta, body = front_matter(render_category("opinions", manifests))
     assert "configs" not in meta and body.count("no run has read the listing yet") == 6
+
+
+@pytest.mark.parametrize("category", sorted(CATEGORIES))
+def test_each_category_card_states_its_schedule_and_ends_with_a_citation(category):
+    card = render_category(category, {})
+    repo_id = next(c.repo_id for c in COLLECTIONS.values() if c.category == category)
+    assert "scheduled daily at 12:37 UTC" in card and "deduplicate on `file_sha256`" in card
+    citation = card[card.index("## Citation"):]
+    assert card.index("## License") < card.index("## Citation") and f"\\url{{https://huggingface.co/datasets/{repo_id}}}" in citation

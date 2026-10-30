@@ -600,6 +600,7 @@ def gaps(manifest):
         f"- `ny_local_laws` covers New York alone, and only its local laws. The Department's guide, [Adopting Local Laws in New York State]({NY_GUIDE}), notes that under the Municipal Home Rule Law a local law \"shall not include an ordinance, resolution or other similar act of the legislative body\", so those acts are not here. Nor are laws filed before the Department's database begins: its manual says \"Local Laws filed prior to January 1, 1998 are not in the Local Laws Database. They are maintained in manual files.\" For those, `ny_local_law_index` has the State's older index, {stats['ny_index']['filed_before_search']:,} rows filed before 1998, without the laws' text.",
         f"- `ny_local_laws` is the search as it answered on {day(ny_source['finished_at'])}. A filing the Department had not yet added, or has removed or corrected since, is not reflected, and since filings took days to weeks to be added (see New York local laws), the weeks before then are incomplete.",
         f"- {NY_OUTSIDE}",
+        "- `ny_local_laws` keeps every filing the search returns as it returns it, so a few are documents other than local laws (such as a floor plan) and a few carry January 1, 2000 as their filing date.",
         *repeats_gap(stats["ny"]),
         scans(),
         tribes_gap(manifest["sources"]["federally_recognized_tribes"]),
@@ -694,6 +695,10 @@ def license_section(manifest):
     ]
 
 
+def citation():
+    return ["## Citation", "", "Cite each source as its License entry above asks, and this dataset as:", "", "```bibtex", "@misc{incrediblecrabuslocallaws,", "  author       = {Marquardt, Max},", f"  title        = {{{TITLE}}},", "  publisher    = {Hugging Face},", f"  howpublished = {{\\url{{https://huggingface.co/datasets/{REPO_ID}}}}}", "}", "```", ""]
+
+
 def render(manifest):
     stats = manifest["stats"]
     ny = manifest["sources"]["ny_local_laws"]
@@ -715,8 +720,8 @@ def render(manifest):
         f"| New York local-law filings | {moment(readings['ny'])} |",
         f"| FEMA Community Status Book | {moment(readings['nfip'])} |",
         "",
-        "A successful scheduled run does not prove FEMA is current. If fema.gov cannot be read, the run reports degraded freshness and retains the published FEMA reading while New York updates can continue. These dates describe the stored data, not the latest probe; the Actions summary reports which sources that probe could check.",
+        "A GitHub Actions job is scheduled daily at 12:37 UTC, which GitHub usually starts hours late and sometimes drops; a run rebuilds only when its probe finds a source changed. A successful scheduled run does not prove FEMA is current. If fema.gov cannot be read, the run reports degraded freshness and retains the published FEMA reading while New York updates can continue. These dates describe the stored data, not the latest probe; the Actions summary reports which sources that probe could check.",
         "",
     ]
-    lines += coverage(stats) + new_york(manifest) + ny_index(manifest) + recognized_tribes(manifest) + flood_communities(manifest) + use() + files(manifest) + matching(manifest) + codifiers(manifest) + gaps(manifest) + sources(manifest) + license_section(manifest) + by_state(stats)
+    lines += coverage(stats) + new_york(manifest) + ny_index(manifest) + recognized_tribes(manifest) + flood_communities(manifest) + use() + files(manifest) + matching(manifest) + codifiers(manifest) + gaps(manifest) + sources(manifest) + license_section(manifest) + citation() + by_state(stats)
     return "\n".join(lines)

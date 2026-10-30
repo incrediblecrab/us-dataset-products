@@ -62,3 +62,13 @@ def test_the_front_matter_carries_the_probe_state_and_no_error_text(tmp_path):
     meta = front_matter(render(manifest))
     assert meta[PROBE_KEY]["failed_runs"] == [{"stopped": "HTTPStatusError", "ended": T1}] and "key" not in meta
     assert reason not in render(manifest).partition("\n---\n")[0]
+
+
+def test_every_card_ends_with_a_citation_naming_its_own_dataset():
+    from crs_products import constitution, constitution_card, summaries, summaries_card
+    from crs_products.card import REPO_ID
+    for module, repo_id in ((None, REPO_ID), (summaries_card, summaries.REPO_ID), (constitution_card, constitution.REPO_ID)):
+        card = (module.render if module else render)({})
+        citation = card[card.index("## Citation"):]
+        assert citation.startswith("## Citation\n\n```bibtex\n@misc{incrediblecrab")
+        assert f"\\url{{https://huggingface.co/datasets/{repo_id}}}" in citation and citation.rstrip().endswith("```")

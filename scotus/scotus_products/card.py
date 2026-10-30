@@ -313,6 +313,12 @@ def render_category(category, manifests):
         f"SELECT id, term, date, docket, title, text_source FROM 'hf://datasets/{repo_id}/{first}/data/*.parquet' WHERE listed ORDER BY date DESC LIMIT 10;",
         "```",
         "",
+        "A file that two collections list is a row in each, so deduplicate on `file_sha256` when combining configs. Rows are never deleted: filter on `listed` for what the Court lists now.",
+        "",
+        "## How it stays current",
+        "",
+        "A GitHub Actions job is scheduled daily at 12:37 UTC, which GitHub usually starts hours late and sometimes drops; a dropped run loses nothing, because the next one reads every listing page again. Each collection's card says what a run checks.",
+        "",
         "## Files",
         "",
         "- `{collection}/data/{partition}.parquet`: the collection's rows, sorted by id.",
@@ -333,4 +339,11 @@ def render_category(category, manifests):
     for text, configs in grouped.items():
         lines.append(f"- {', '.join(configs)}: {text}")
     lines += ["", f"The pipeline's code is under the MIT License ([{GITHUB.removeprefix('https://')}]({GITHUB})).", ""]
+    lines += citation_lines(repo_id, f"Supreme Court of the United States: {title}")
     return "\n".join(lines)
+
+
+def citation_lines(repo_id, title):
+    """A BibTeX entry for the dataset, so a user can cite it."""
+    key = "incrediblecrab" + "".join(ch for ch in repo_id.split("/")[-1] if ch.isalnum())
+    return ["## Citation", "", "```bibtex", f"@misc{{{key},", "  author       = {Marquardt, Max},", f"  title        = {{{title}}},", "  publisher    = {Hugging Face},", f"  howpublished = {{\\url{{https://huggingface.co/datasets/{repo_id}}}}}", "}", "```", ""]

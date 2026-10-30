@@ -650,3 +650,8 @@ def test_verify_names_a_term_file_with_other_columns(world, capsys):
         "OT2010: data/OT2010.parquet has no column questions_presented_url",
         "OT2010: data/OT2010.parquet has a column questions_presented the schema does not have",
     ]
+
+
+def test_the_cases_card_ends_with_a_citation_naming_the_dataset():
+    card = cases.render_card(cases.empty_manifest())
+    assert card.rstrip().endswith("```") and f"\\url{{https://huggingface.co/datasets/{cases.REPO_ID}}}" in card[card.index("## Citation"):]

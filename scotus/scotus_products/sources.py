@@ -763,6 +763,7 @@ COLLECTIONS = {c.name: c for c in (
         notes=(
             "The Court's transcript pages say: \"Same-day transcripts are considered official but subject to final review.\" and \"Transcripts for oral arguments prior to October Term 2000 have been scanned from the Supreme Court Library collection. Please disregard any stray or handwritten markings on these copies.\"",
             "The Court's page on the availability of transcripts says: \"(Heritage Reporting Corporation has provided transcripts for the Court beginning in October Term 2017; prior to that Term, Alderson Reporting Corporation provided the transcripts.)\"",
+            "When the Court replaces a transcript, such as a same-day transcript after final review, with a file at another address, the earlier file stays as a row with `listed` = false, so an argument can have several rows; filter on `listed` for one transcript per argument.",
             "Measured September 26, 2026: 273 transcripts of October Terms 2004 to 2010 " + NO_TEXT_HYPHENS.format(hyphens="17,322") + " The transcript of 07-1372 prints \"purposes --\" at the end of a line on its page 4, and `text` has \"purposes -\". In 50 other transcripts, of October Terms 2004 and 2005, the files draw hyphens with code 0xAD, which `text` gives as a hyphen (U+002D) and pypdf as a soft hyphen (U+00AD), and that accounts for the whole difference the cross-check counts.",
         ),
         category="oral-arguments",
