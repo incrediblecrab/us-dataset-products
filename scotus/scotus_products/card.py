@@ -344,6 +344,7 @@ def render_category(category, manifests):
 
 
 def citation_lines(repo_id, title):
-    """A BibTeX entry for the dataset, so a user can cite it."""
+    """A BibTeX entry for the dataset, so a user can cite it. A bare & in a field breaks LaTeX, and one category is "Filing & Rules"."""
     key = "incrediblecrab" + "".join(ch for ch in repo_id.split("/")[-1] if ch.isalnum())
+    title = title.replace("&", "\\&")
     return ["## Citation", "", "```bibtex", f"@misc{{{key},", "  author       = {Marquardt, Max},", f"  title        = {{{title}}},", "  publisher    = {Hugging Face},", f"  howpublished = {{\\url{{https://huggingface.co/datasets/{repo_id}}}}}", "}", "```", ""]

@@ -655,3 +655,11 @@ def test_verify_names_a_term_file_with_other_columns(world, capsys):
 def test_the_cases_card_ends_with_a_citation_naming_the_dataset():
     card = cases.render_card(cases.empty_manifest())
     assert card.rstrip().endswith("```") and f"\\url{{https://huggingface.co/datasets/{cases.REPO_ID}}}" in card[card.index("## Citation"):]
+
+
+def test_a_run_that_assembles_a_term_writes_the_current_dataset_name(world, capsys, monkeypatch):
+    world.run(capsys)
+    (world.root / MANIFEST).write_text(json.dumps({**world.manifest(), "dataset": "incrediblecrab/scotus-cases"}))
+    monkeypatch.setattr(cases, "BUILDER", cases.BUILDER + 1)
+    status, report = world.run(capsys)
+    assert status == 0 and report["terms"] and world.manifest()["dataset"] == cases.REPO_ID == "incrediblecrab/us-scotus-cases"

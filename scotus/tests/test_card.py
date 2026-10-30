@@ -245,3 +245,9 @@ def test_each_category_card_states_its_schedule_and_ends_with_a_citation(categor
     assert "scheduled daily at 12:37 UTC" in card and "deduplicate on `file_sha256`" in card
     citation = card[card.index("## Citation"):]
     assert card.index("## License") < card.index("## Citation") and f"\\url{{https://huggingface.co/datasets/{repo_id}}}" in citation
+    assert "&" not in citation.replace("\\&", "")
+
+
+def test_an_ampersand_in_a_category_title_is_escaped_for_bibtex():
+    citation = render_category("filing-and-rules", {})
+    assert "  title        = {Supreme Court of the United States: Filing \\& Rules}," in citation
