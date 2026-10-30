@@ -219,7 +219,7 @@ MUTATIONS = [
     ("build.py", "snapshot: listed but not committed", "    files[nfip.SNAPSHOT] = local\n", ""),
     ("cli.py", "snapshot: bytes not checked against the manifest", "    if data is None or hashlib.sha256(data).hexdigest() != entry.get(\"sha256\"):\n", "    if data is None:\n"),
     ("cli.py", "snapshot: reading not checked against the manifest", "    if differ:\n        raise SourceChanged(f\"{nfip.SNAPSHOT} is not the reading", "    if False:\n        raise SourceChanged(f\"{nfip.SNAPSHOT} is not the reading"),
-    ("cli.py", "snapshot: a refused run never falls back", "        stored = stored_nfip_snapshot(store)\n        if stored is None:\n            raise\n", "        raise\n"),
+    ("cli.py", "snapshot: a refused run never falls back", "    except (Blocked, Unavailable, httpx.HTTPStatusError) as error:\n        stored = stored_nfip_snapshot(store)\n", "    except (Blocked, Unavailable, httpx.HTTPStatusError) as error:\n        raise\n        stored = stored_nfip_snapshot(store)\n"),
     ("verify.py", "snapshot: verify skips the stored files", "        if nfip.SNAPSHOT in entries and nfip.SNAPSHOT in listed:\n", "        if False:\n"),
     ("verify.py", "snapshot: verify ignores their reading", "    if differ:\n        problems.append(f\"{nfip.SNAPSHOT} is not the reading", "    if False:\n        problems.append(f\"{nfip.SNAPSHOT} is not the reading"),
     ("verify.py", "snapshot: unreadable stored files crash verify", "    except (zipfile.BadZipFile, KeyError, ValueError, TypeError) as error:\n", "    except ZeroDivisionError as error:\n"),
