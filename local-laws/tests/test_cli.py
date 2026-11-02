@@ -185,13 +185,14 @@ def test_the_hub_is_not_written_from_code_that_is_not_committed(offline, monkeyp
     assert "refusing to write to the Hub" in capsys.readouterr().err
 
 
-def test_a_rerun_commits_a_card_that_is_not_the_current_render(tmp_path, offline, capsys, snapshot):
+def test_a_rerun_commits_a_card_that_is_not_the_current_render(tmp_path, offline, capsys, snapshot, flood):
+    # Both runs read the same FEMA snapshot: a live reading stamps retrieved_at from the clock, and two runs a second apart would differ in the manifest, hiding whether the card alone forces the commit.
     out = tmp_path / "out"
-    assert run("run", "--local", str(out), "--ny-snapshot", snapshot) == 0
+    assert run("run", "--local", str(out), "--ny-snapshot", snapshot, "--nfip-snapshot", flood) == 0
     card = (out / CARD).read_text()
     (out / CARD).write_text("an older card\n")
     capsys.readouterr()
-    assert run("run", "--local", str(out), "--ny-snapshot", snapshot) == 0
+    assert run("run", "--local", str(out), "--ny-snapshot", snapshot, "--nfip-snapshot", flood) == 0
     assert json.loads(capsys.readouterr().out)["unchanged"] is False and (out / CARD).read_text() == card
 
 
