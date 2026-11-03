@@ -62,13 +62,26 @@ MANIFEST = "manifest.json"
 CARD = "README.md"
 # A row group closes once its rows reach this many bytes; one scanned volume can exceed it alone, and then fills a row group by itself.
 ROW_GROUP_BYTES = 64 << 20
-COMMIT_ATTEMPTS = 4
+# A Hub call that is retried (a commit, a Trusted Publishing token trade) is tried this many times, waiting retry_delay between tries.
+HUB_ATTEMPTS = 4
 RETRYABLE = (408, 429, 500, 502, 503, 504)
 # Failures with no HTTP status that are still a busy Hub or network, so they are retried as well: a dropped connection or timeout, and a README check answered with a page that is not JSON. huggingface_hub 1.32.0 parses the validate-yaml body before it checks the status, so a busy Hub raises JSONDecodeError there, before anything is uploaded; the Fed scheduled run of September 27, 2026 stopped on one.
 TRANSIENT = (httpx.TransportError, json.JSONDecodeError)
 # Measured September 23, 2026 on a scratch dataset (for the CRS datasets this pipeline is adapted from): a commit whose parent_commit is no longer the branch head answers 412 Precondition Failed.
 CONFLICT = 412
 log = logging.getLogger("scotus_products")
+
+
+def retry_delay(error, attempt):
+    """Seconds to wait before trying a failed Hub call again, or None when it must be raised: its last attempt, or an HTTP status that is not RETRYABLE. Called with an HfHubHTTPError or a TRANSIENT failure."""
+    if attempt == HUB_ATTEMPTS - 1 or (isinstance(error, HfHubHTTPError) and failure(error) not in RETRYABLE):
+        return None
+    return 60 * (attempt + 1)
+
+
+def failure(error):
+    """The HTTP status of a Hub failure, or the name of a TRANSIENT one."""
+    return getattr(error.response, "status_code", None) if isinstance(error, HfHubHTTPError) else type(error).__name__
 
 
 class Superseded(RuntimeError):
@@ -400,25 +413,24 @@ class HubStore(_Staging):
             return None
         if self.superseded:
             raise self.superseded
-        for attempt in range(COMMIT_ATTEMPTS):
+        for attempt in range(HUB_ATTEMPTS):
             operations = [CommitOperationAdd(path_in_repo=repo_path, path_or_fileobj=str(local)) for repo_path, local in sorted(self.staged.items())]
             try:
                 oid = self.api.create_commit(self.repo_id, operations=operations, commit_message=message, repo_type="dataset", parent_commit=self.revision).oid
                 break
             except (HfHubHTTPError, *TRANSIENT) as error:
-                http = isinstance(error, HfHubHTTPError)
-                status = getattr(error.response, "status_code", None) if http else None
-                if status == CONFLICT:
+                if failure(error) == CONFLICT:
                     oid = self._landed()
                     if oid:
                         log.warning("commit %r had already landed as %s", message[:60], oid[:12])
                         break
                     self.superseded = Superseded(f"{self.repo_id} has a commit this run did not write (its last commit was {self.revision[:12]})")
                     raise self.superseded from None
-                if attempt == COMMIT_ATTEMPTS - 1 or (http and status not in RETRYABLE):
+                delay = retry_delay(error, attempt)
+                if delay is None:
                     raise
-                log.warning("commit attempt %d failed with %s; retrying", attempt + 1, f"HTTP {status}" if http else type(error).__name__)
-                time.sleep(60 * (attempt + 1))
+                log.warning("commit attempt %d failed with %s; retrying", attempt + 1, failure(error))
+                time.sleep(delay)
         self.revision = oid
         self.clear()
         return oid

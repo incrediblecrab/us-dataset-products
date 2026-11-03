@@ -15,10 +15,12 @@ BASE = "https://www.supremecourt.gov/"
 
 @pytest.fixture(autouse=True)
 def no_token_exchange(monkeypatch):
-    """The suite also runs on GitHub Actions, where trusted_publishing would trade a real OIDC id token; no test may reach GitHub or the Hub for one."""
+    """The suite also runs on GitHub Actions, where trusted_publishing would trade a real OIDC id token; no test may reach GitHub or the Hub for one. HF_OIDC_RESOURCE is cleared for every test and removed after it, since trusted_publishing sets it in os.environ itself and monkeypatch.delenv records nothing for a variable that is absent; with it unset, huggingface_hub's own token lookup does not trade either."""
     import huggingface_hub
 
     monkeypatch.setattr(huggingface_hub, "get_token", lambda: None)
+    monkeypatch.setenv("HF_OIDC_RESOURCE", "")
+    monkeypatch.delenv("HF_OIDC_RESOURCE")
 
 
 def page_bytes(name):

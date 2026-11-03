@@ -236,7 +236,7 @@ def test_trusted_publishing_retries_a_busy_token_service_and_raises_a_refusal_at
         cli.trusted_publishing("incrediblecrab/us-scotus-about")
     assert sleeps == [] and cli.os.environ["HF_OIDC_RESOURCE"] == "datasets/incrediblecrab/us-scotus-about"
 
-    answers[:] = [error(503)] * cli.TOKEN_ATTEMPTS + ["hf_jwt"]
+    answers[:] = [error(503)] * cli.HUB_ATTEMPTS + ["hf_jwt"]
     with pytest.raises(HfHubHTTPError):
         cli.trusted_publishing("incrediblecrab/us-scotus-about")
     assert sleeps == [60, 120, 180] and answers == ["hf_jwt"]
