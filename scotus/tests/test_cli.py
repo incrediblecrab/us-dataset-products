@@ -198,3 +198,45 @@ def test_a_run_on_actions_names_each_repo_for_trusted_publishing_keeps_a_reserve
     monkeypatch.delenv("HF_OIDC_RESOURCE")
     seen.clear()
     assert main("run", "--dataset", NAME) == 0 and seen[0][2] is None and seen[0][3] == 1000 + 300 * 60
+
+
+def test_trusted_publishing_retries_a_busy_token_service_and_raises_a_refusal_at_once(monkeypatch):
+    import httpx
+    import huggingface_hub
+    from huggingface_hub.errors import HfHubHTTPError
+
+    def error(status):
+        return HfHubHTTPError(f"{status} from the fake token service", response=httpx.Response(status, request=httpx.Request("GET", "https://token.actions.example/idtoken")))
+
+    answers, sleeps = [], []
+
+    def get_token():
+        answer = answers.pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    monkeypatch.setattr(huggingface_hub, "get_token", get_token)
+    monkeypatch.setattr(cli.time, "sleep", sleeps.append)
+    monkeypatch.delenv("HF_OIDC_RESOURCE", raising=False)
+
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    answers[:] = [error(503)]
+    cli.trusted_publishing("incrediblecrab/us-scotus-opinions")
+    assert answers and "HF_OIDC_RESOURCE" not in cli.os.environ and sleeps == []
+
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    answers[:] = [error(503), httpx.ConnectTimeout("upstream connect error"), "hf_jwt"]
+    cli.trusted_publishing("incrediblecrab/us-scotus-opinions")
+    assert answers == [] and cli.os.environ["HF_OIDC_RESOURCE"] == "datasets/incrediblecrab/us-scotus-opinions" and sleeps == [60, 120]
+
+    sleeps.clear()
+    answers[:] = [error(401), "hf_jwt"]
+    with pytest.raises(HfHubHTTPError):
+        cli.trusted_publishing("incrediblecrab/us-scotus-about")
+    assert sleeps == [] and cli.os.environ["HF_OIDC_RESOURCE"] == "datasets/incrediblecrab/us-scotus-about"
+
+    answers[:] = [error(503)] * cli.TOKEN_ATTEMPTS + ["hf_jwt"]
+    with pytest.raises(HfHubHTTPError):
+        cli.trusted_publishing("incrediblecrab/us-scotus-about")
+    assert sleeps == [60, 120, 180] and answers == ["hf_jwt"]

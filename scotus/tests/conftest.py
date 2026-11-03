@@ -13,6 +13,14 @@ FIXTURES = Path(__file__).parent / "fixtures"
 BASE = "https://www.supremecourt.gov/"
 
 
+@pytest.fixture(autouse=True)
+def no_token_exchange(monkeypatch):
+    """The suite also runs on GitHub Actions, where trusted_publishing would trade a real OIDC id token; no test may reach GitHub or the Hub for one."""
+    import huggingface_hub
+
+    monkeypatch.setattr(huggingface_hub, "get_token", lambda: None)
+
+
 def page_bytes(name):
     return gzip.decompress((FIXTURES / "pages" / f"{name}.html.gz").read_bytes())
 

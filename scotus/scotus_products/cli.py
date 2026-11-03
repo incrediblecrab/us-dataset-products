@@ -15,11 +15,13 @@ from .card import render, render_category, status as collection_status
 from .http import Fetcher
 from .pipeline import CLEAN_STOPS, SUMMARY_COLUMNS, Context, summarize, sync
 from .sources import COLLECTIONS, Listing
-from .store import CARD, partition_path
+from .store import CARD, RETRYABLE, TRANSIENT, partition_path
 
 ALL = "all"
 # Run counts that mean the dataset now holds something it did not.
 CHANGES = ("added", "replaced", "updated", "delisted", "relisted")
+TOKEN_ATTEMPTS = 4
+log = logging.getLogger("scotus_products")
 
 
 def open_store(args, collection, write=False):
@@ -35,9 +37,26 @@ def open_store(args, collection, write=False):
 
 
 def trusted_publishing(repo_id):
-    """On GitHub Actions, huggingface_hub trades the job's OIDC id token for a short-lived token scoped to one repo, and refreshes it before it expires; set per repo, because one run writes to several. The HfApi must be created with token=None, so every request asks for the token of the repo named here."""
-    if os.environ.get("GITHUB_ACTIONS") == "true":
-        os.environ["HF_OIDC_RESOURCE"] = f"datasets/{repo_id}"
+    """On GitHub Actions, huggingface_hub trades the job's OIDC id token for a short-lived token scoped to one repo, and refreshes it before it expires; set per repo, because one run writes to several. The HfApi must be created with token=None, so every request asks for the token of the repo named here.
+
+    The trade is made here, retrying a busy GitHub or Hub as a commit does, because huggingface_hub does not retry it and keeps only one repo's token, so a sync trades again at every change of repo: 7 times for the 24 collections in 6 repos, where crs, fed and local-laws trade once. The scheduled run of November 2, 2026 stopped when GitHub's id-token endpoint answered 503. Later requests reuse the token cached here; a refusal such as an unregistered Trusted Publisher is raised at once."""
+    if os.environ.get("GITHUB_ACTIONS") != "true":
+        return
+    from huggingface_hub import get_token
+    from huggingface_hub.errors import HfHubHTTPError
+
+    os.environ["HF_OIDC_RESOURCE"] = f"datasets/{repo_id}"
+    for attempt in range(TOKEN_ATTEMPTS):
+        try:
+            get_token()
+            return
+        except (HfHubHTTPError, *TRANSIENT) as error:
+            http = isinstance(error, HfHubHTTPError)
+            status = getattr(error.response, "status_code", None) if http else None
+            if attempt == TOKEN_ATTEMPTS - 1 or (http and status not in RETRYABLE):
+                raise
+            log.warning("token for %s: attempt %d failed with %s; retrying", repo_id, attempt + 1, f"HTTP {status}" if http else type(error).__name__)
+            time.sleep(60 * (attempt + 1))
 
 
 def step_outputs(**values):
