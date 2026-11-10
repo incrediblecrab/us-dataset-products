@@ -139,6 +139,53 @@ def test_live_extra_rows_are_confirmed_through_detail_before_reporting(synced):
     assert "still serves" in report["warnings"][0]
 
 
+class DuplicatesSource(ScriptedSource):
+    """A listing pass that served the advertised count with `duplicates` repeats in place of products, as source.CrsSource accepts it."""
+
+    def __init__(self, state, duplicates):
+        super().__init__(state)
+        self.duplicates = duplicates
+
+    def list_all(self):
+        head, items = super().list_all()
+        head["listing"] = {"count": head["count"], "distinct": len(items), "received": len(items) + self.duplicates, "duplicates": self.duplicates, "complete": True}
+        return head, items
+
+
+def test_stored_products_displaced_by_duplicates_are_confirmed_and_compared_exactly(synced):
+    store, state = synced
+    del state.units["R40003"]
+    state.exists.add("R40003")
+    state.count = 4
+    report = verify(store, DuplicatesSource(state, duplicates=1))
+    assert state.exists_asked == ["R40003"]
+    assert report["problems"] == [] and "warnings" not in report
+    assert (report["live"]["listed"], report["live"]["missing"], report["live"]["extra"]) == (4, 0, 0)
+
+
+def test_more_omitted_products_than_duplicates_still_degrade_the_comparison(synced):
+    store, state = synced
+    for uid in ("R40002", "R40003"):
+        del state.units[uid]
+        state.exists.add(uid)
+    state.count = 4
+    report = verify(store, DuplicatesSource(state, duplicates=1))
+    assert report["problems"] == [] and report["live"]["status"] == "incomplete" and "still serves 2" in report["warnings"][0]
+
+
+def test_a_sync_on_a_duplicates_only_listing_finishes_and_keeps_the_displaced_product(synced):
+    store, state = synced
+    del state.units["R40003"]
+    state.exists.add("R40003")
+    state.count = 5
+    state.units["R40004"] = "2026-09-02T10:00:00Z"
+    result = sync(Context(store=store, deadline=math.inf), DuplicatesSource(state, duplicates=1))
+    assert result["finished"] is True and result["stopped"] is None
+    ids = {row["id"] for row in store.read_partition("R40")}
+    assert ids == {"R40001", "R40002", "R40003", "R40004"}
+    assert verify(store)["problems"] == []
+
+
 def test_an_unreconciled_source_does_not_replace_the_last_complete_sync(synced):
     store, state = synced
     before = store.read_manifest()

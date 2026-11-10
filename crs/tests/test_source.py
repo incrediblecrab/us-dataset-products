@@ -245,9 +245,51 @@ def test_a_count_change_during_pagination_never_claims_completeness(monkeypatch)
     assert head["listing"]["complete"] is False and head["listing"]["counts_stable"] is False
 
 
-def test_invalid_listing_is_not_an_empty_success():
-    with pytest.raises(ValueError, match="listing"):
+def test_invalid_listing_is_not_an_empty_success(monkeypatch):
+    monkeypatch.setattr(source_module, "PAGE_RETRY_SECONDS", 0)
+    with pytest.raises(ValueError, match=r"listing response at offset 0: .*keys \[\], 3 attempts"):
         CrsSource(FakeFetcher(json_map={f"{API}/crsreport": {}})).list_all()
+    with pytest.raises(ValueError, match="HTTP 404"):
+        CrsSource(FakeFetcher(json_map={f"{API}/crsreport": None})).list_all()
+
+
+def test_a_listing_page_that_is_not_a_listing_is_asked_again(monkeypatch):
+    # November 9, 2026: verify's first listing page came back without pagination or CRSReports, between run requests that answered.
+    monkeypatch.setattr(source_module, "PAGE_RETRY_SECONDS", 0)
+    answers = [{}, None, {"CRSReports": [{"id": "R40001", "updateDate": "a"}], "pagination": {"count": 1}}]
+    fetcher = FakeFetcher(json_map={f"{API}/crsreport": lambda params: answers.pop(0) if len(answers) > 1 else answers[0]})
+    head, found = CrsSource(fetcher).list_all()
+    assert set(found) == {"R40001"} and head["listing"]["complete"] is True
+
+
+def test_a_pass_serving_a_few_duplicates_in_place_of_products_is_complete(monkeypatch):
+    # Measured November 10, 2026: two passes ten minutes apart each served exactly the advertised 14,239 rows, the same 11 IDs twice (12 rows of them stamped 2025-09-08T11:20:24Z) and 11 stored products never, which the detail API served.
+    monkeypatch.setattr(source_module, "PAGE", 2)
+    monkeypatch.setattr(source_module, "DUPLICATE_SHARE", 0.25)
+    pages = {0: ["R40001", "R40002"], 2: ["R40002", "R40004"]}
+
+    def listing(params):
+        return {"CRSReports": [{"id": uid, "updateDate": "same"} for uid in pages.get(params["offset"], [])], "pagination": {"count": 4}}
+
+    fetcher = FakeFetcher(json_map={f"{API}/crsreport": listing})
+    head, found = CrsSource(fetcher).list_all()
+    assert set(found) == {"R40001", "R40002", "R40004"}
+    assert head["listing"]["complete"] is True
+    assert (head["listing"]["attempts"], head["listing"]["received"], head["listing"]["duplicates"]) == (1, 4, 1)
+    assert source_module.listing_problem(source_module.listing_summary(head, found)) is None
+
+
+def test_more_duplicates_than_the_share_or_a_short_pass_stay_incomplete(monkeypatch):
+    monkeypatch.setattr(source_module, "PAGE", 2)
+    monkeypatch.setattr(source_module, "DUPLICATE_SHARE", 0.25)
+    repeated = {0: ["R40001", "R40001"], 2: ["R40001", "R40004"]}
+    short = {0: ["R40001", "R40002"], 2: ["R40003"]}
+    for pages in (repeated, short):
+        def listing(params, pages=pages):
+            return {"CRSReports": [{"id": uid, "updateDate": "same"} for uid in pages.get(params["offset"], [])], "pagination": {"count": 4}}
+
+        head, _ = CrsSource(FakeFetcher(json_map={f"{API}/crsreport": listing})).list_all()
+        assert head["listing"]["complete"] is False and head["listing"]["attempts"] == source_module.LISTING_ATTEMPTS
 
 
 def test_exists_rejects_a_detail_for_a_different_product():

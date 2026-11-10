@@ -9,6 +9,7 @@ import hashlib
 import json
 import logging
 import re
+import time
 from urllib.parse import quote
 
 import httpx
@@ -19,6 +20,11 @@ from .text import html_text, pdf_text, summary_text, tidy
 API = "https://api.congress.gov/v3"
 PAGE = 250
 LISTING_ATTEMPTS = 3
+# Congress.gov orders the listing by updateDate, and products that share one (archived products restamped 2025-09-08T11:20:24Z, for one) come back in a different order on each page request. Offset paging then serves some of them twice and others never: on November 9, 2026 all 21 passes over 2.5 hours came up 10 or 11 distinct IDs short of the advertised 14,239, and on November 10 two passes ten minutes apart each returned exactly the advertised 14,239 rows with the same 11 IDs twice and 11 stored products absent, which the detail API still served. A pass that served exactly the advertised count, with stable counts and head, and no more duplicates than this share of the count, is complete: the sync confirms each stored product it omits through the detail API, and a new product it hides is listed by a later run.
+DUPLICATE_SHARE = 0.002
+# A listing page that is not a listing (a 404, or a body without pagination or CRSReports) is asked again this many times, waiting this many seconds times the attempt number: one such page ended the scheduled verification of November 9, 2026 between two that answered.
+PAGE_ATTEMPTS = 3
+PAGE_RETRY_SECONDS = 30
 NO_TEXT = {"text": None, "text_source": None, "text_url": None, "text_sha256": None}
 log = logging.getLogger("crs_products")
 
@@ -79,9 +85,15 @@ class CrsSource:
         self.html_blocked = None
 
     def page(self, offset):
-        data = self.fetcher.json(f"{API}/crsreport", params={"format": "json", "limit": PAGE, "offset": offset})
-        if not isinstance(data, dict) or not isinstance(data.get("pagination"), dict) or not isinstance(data.get("CRSReports"), list):
-            raise ValueError("invalid CRS listing response: missing pagination or CRSReports")
+        for attempt in range(1, PAGE_ATTEMPTS + 1):
+            data = self.fetcher.json(f"{API}/crsreport", params={"format": "json", "limit": PAGE, "offset": offset})
+            if isinstance(data, dict) and isinstance(data.get("pagination"), dict) and isinstance(data.get("CRSReports"), list):
+                break
+            got = "HTTP 404" if data is None else f"keys {sorted(data)[:5]}" if isinstance(data, dict) else type(data).__name__
+            if attempt == PAGE_ATTEMPTS:
+                raise ValueError(f"invalid CRS listing response at offset {offset}: missing pagination or CRSReports ({got}, {attempt} attempts)")
+            log.warning("invalid CRS listing response at offset %d (%s); asking again (attempt %d of %d)", offset, got, attempt + 1, PAGE_ATTEMPTS)
+            time.sleep(PAGE_RETRY_SECONDS * attempt)
         count, items = data["pagination"].get("count"), data["CRSReports"]
         if not isinstance(count, int) or isinstance(count, bool) or count < 0:
             raise ValueError("invalid CRS listing count")
@@ -110,9 +122,11 @@ class CrsSource:
                 pages += 1
                 stable = stable and page_count == count
             end = self.head()
+            consistent = stable and end == head
+            duplicates_only = offset == count and offset - len(found) <= int(DUPLICATE_SHARE * count)
             summary = {"count": count, "distinct": len(found), "received": offset, "duplicates": offset - len(found),
                        "pages": pages, "attempts": attempt, "counts_stable": stable and end["count"] == count,
-                       "head_stable": end == head, "complete": stable and end == head and len(found) == count}
+                       "head_stable": end == head, "complete": consistent and (len(found) == count or duplicates_only)}
             if summary["complete"]:
                 break
             log.warning("%s (pass %d/%d)", listing_problem(summary), attempt, LISTING_ATTEMPTS)

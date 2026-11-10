@@ -80,7 +80,11 @@ def live_diff(manifest, stored, source, problems, partition_of=partition_of):
     warning = listing_problem(summary)
     if warning is None:
         present = [uid for uid in sorted(hub - live) if source.exists(uid)]
-        if present:
+        if present and len(present) <= summary.get("duplicates", 0):
+            # A pass with duplicates in place of products (source.DUPLICATE_SHARE): the stored products it omitted, still served, are the ones the repeats displaced.
+            live |= set(present)
+            summary["unlisted_but_present"] = len(present)
+        elif present:
             summary.update(complete=False, unlisted_but_present=len(present))
             warning = f"source listing incomplete: the detail API still serves {len(present)} stored IDs omitted by the listing; exact comparison unavailable"
     if warning:

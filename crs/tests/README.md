@@ -10,11 +10,11 @@ Offline tests: `pip install '.[test]'`, then `python -m pytest -q`. No network o
 
 - `conftest.py`: a scripted CRS source, and a fetcher that serves fixtures by URL.
 - `test_pipeline.py`: the sync loop: first sync, idle runs, changes, re-stamps, removals, retries, the suspect-listing guard, resumption, the writer lease, the probe's decision.
-- `test_source.py`: rows from real API records, text renditions, bot challenges, listing pages.
+- `test_source.py`: rows from real API records, text renditions, bot challenges, listing pages, a pass with a few duplicates in place of products, and a listing page that is not a listing, asked again.
 - `test_summaries.py`: summaries against a fake API that reorders ties: complete reads where offset paging skips, the daily check, removals.
 - `test_constitution.py`: Constitution Annotated ids, listing, rows, a sync.
 - `test_http.py`: pacing, challenges, quota exhaustion, missing keys, outages.
 - `test_store.py`: partition keys, Parquet round trips, an empty partition written without a row group, the commit fence and which failures it retries, no scratch left behind.
-- `test_verify.py`: each planted data defect is named; exit 1. An unreconciled listing is read again after each wait and, if it never reconciles, leaves the last complete sync in place.
+- `test_verify.py`: each planted data defect is named; exit 1. An unreconciled listing is read again after each wait and, if it never reconciles, leaves the last complete sync in place; stored products a duplicates-only pass omitted are confirmed and compared exactly.
 - `test_card.py`: the products card's front matter and numbers.
 - `test_cli.py`: exit codes, `$GITHUB_OUTPUT`, Trusted Publishing, dataset routing, and every workflow's commands, options, outputs and schedule.
