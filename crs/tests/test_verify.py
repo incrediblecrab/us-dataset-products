@@ -179,7 +179,8 @@ def test_a_sync_on_a_duplicates_only_listing_finishes_and_keeps_the_displaced_pr
     state.exists.add("R40003")
     state.count = 5
     state.units["R40004"] = "2026-09-02T10:00:00Z"
-    result = sync(Context(store=store, deadline=math.inf), DuplicatesSource(state, duplicates=1))
+    state.ctx = Context(store=store, deadline=math.inf, writer="local")
+    result = sync(state.ctx, DuplicatesSource(state, duplicates=1))
     assert result["finished"] is True and result["stopped"] is None
     ids = {row["id"] for row in store.read_partition("R40")}
     assert ids == {"R40001", "R40002", "R40003", "R40004"}
