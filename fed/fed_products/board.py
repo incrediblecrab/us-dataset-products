@@ -164,7 +164,8 @@ def historical_year(raw, url):
         holder = anchor.getparent()
         while holder is not None and holder.tag not in ("p", "li", "td", "div"):
             holder = holder.getparent()
-        group = groups.setdefault(id(holder), {"dates": set(), "html": None, "pdf": None})
+        # Keyed by the element, not id(element): lxml hands out a fresh proxy per lookup, and once one is freed a later paragraph's proxy can reuse its id, merging two meetings. A key keeps its proxy alive.
+        group = groups.setdefault(holder, {"dates": set(), "html": None, "pdf": None})
         if pdf:
             group["dates"].add(iso_of(pdf.group(1)))
             group["pdf"] = group["pdf"] or link

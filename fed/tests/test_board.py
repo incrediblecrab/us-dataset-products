@@ -1,5 +1,7 @@
 """The Board's lists and pages, from pages recorded September 25, 2026 (the Kansas City page of March 6, 2024 on September 26)."""
 
+from datetime import date, timedelta
+
 import pytest
 
 from conftest import recorded
@@ -63,6 +65,20 @@ def test_historical_pages_date_redbooks_by_their_pdf_and_hold_both_editions_of_a
     assert historical(1968) == [] and historical(1969) == []
     both = {item.date: item for item in historical(1996)}
     assert both["1996-09-11"].html_url is None and both["1996-10-30"].html_url == f"{ERA1}default.htm"
+
+
+def test_meetings_far_apart_on_a_long_page_stay_apart():
+    # On November 9, 2026 the scheduled verify failed on the unchanged 1993 page: "one meeting's Beige Book links name dates ['1993-05-05', '1993-09-08']". Links were grouped by id() of their paragraph, which nothing kept alive, so a later paragraph could reuse an earlier one's id and the two meetings merged. One page rarely triggers it; the real 1993 meeting markup repeated 500 times did in every run tried under Python 3.14 and 3.15.
+    url = f"{MP}fomchistorical1993.htm"
+    lines = recorded(url).decode("utf-8").splitlines()
+    start = next(n for n, line in enumerate(lines) if "fomc19930518beige19930505" in line) - 60
+    end = next(n for n, line in enumerate(lines) if "fomc19930707beige19930623" in line) - 60
+    meeting = "\n".join(lines[start:end])
+    assert meeting.count("beige1993") == 1, "the block holds exactly one meeting's Beige Book"
+    days = [date(1900, 1, 1) + timedelta(days=n) for n in range(500)]
+    blocks = [meeting.replace("fomc19930518beige19930505", f"fomc{day:%Y%m%d}beige{day:%Y%m%d}") for day in days]
+    page = "\n".join([line for line in lines[:start] if "beige1993" not in line] + blocks + [line for line in lines[end:] if "beige1993" not in line])
+    assert [item.date for item in historical_year(page.encode(), url)] == [day.isoformat() for day in days]
 
 
 def test_the_indexes_link_every_year():
