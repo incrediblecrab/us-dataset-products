@@ -284,3 +284,41 @@ def test_rows_round_trip_with_list_columns_and_typed_version(tmp_path):
     assert empty["rows"] == 0 and read_parquet(tmp_path / "empty.parquet") == []
     # The datasets library reads a file in batches the size of its first row group, and fails on one of 0 rows.
     assert pq.ParquetFile(tmp_path / "empty.parquet").metadata.num_row_groups == 0
+
+
+def busy_lookup(status):
+    """What hf_hub_download 1.32.0 raises when its HEAD request fails and its own retry gives up: LocalEntryNotFoundError, chained from the failure."""
+    from huggingface_hub.errors import LocalEntryNotFoundError
+
+    try:
+        raise http_error(status)
+    except HfHubHTTPError as cause:
+        try:
+            raise LocalEntryNotFoundError("An error happened while trying to locate the file on the Hub") from cause
+        except LocalEntryNotFoundError as error:
+            return error
+
+
+def test_a_busy_file_lookup_is_retried_and_never_read_as_a_missing_file(hub, monkeypatch):
+    store, api = hub
+    waits, calls = [], []
+    monkeypatch.setattr(store_module.time, "sleep", waits.append)
+    plan = {"manifest.json": [busy_lookup(429)], "README.md": [busy_lookup(503)] * 4, "other.json": [busy_lookup(403)]}
+
+    def download(repo_id, repo_path, **kwargs):
+        calls.append(repo_path)
+        if plan[repo_path]:
+            raise plan[repo_path].pop(0)
+        target = Path(kwargs["local_dir"]) / repo_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text('{"n": 1}')
+        return str(target)
+
+    monkeypatch.setattr(store_module, "hf_hub_download", download)
+    assert store.read_manifest() == {"n": 1} and waits == [60]
+    with pytest.raises(HfHubHTTPError) as raised:
+        store.read_text("README.md")
+    assert raised.value.response.status_code == 503 and calls.count("README.md") == 4 and waits == [60, 60, 120, 180]
+    with pytest.raises(HfHubHTTPError):
+        store.read_text("other.json")
+    assert calls.count("other.json") == 1, "a refusal behind the lookup is raised at once"

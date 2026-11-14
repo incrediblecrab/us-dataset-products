@@ -19,7 +19,7 @@ import httpx
 import pyarrow as pa
 import pyarrow.parquet as pq
 from huggingface_hub import CommitOperationAdd, DatasetCard, HfApi, HfFileSystem, hf_hub_download
-from huggingface_hub.errors import EntryNotFoundError, HfHubHTTPError, RemoteEntryNotFoundError
+from huggingface_hub.errors import EntryNotFoundError, HfHubHTTPError, LocalEntryNotFoundError, RemoteEntryNotFoundError
 
 SCHEMA = pa.schema([
     ("id", pa.string()),
@@ -73,10 +73,16 @@ def hub_read(call, *args, **kwargs):
     for attempt in range(HUB_ATTEMPTS):
         try:
             return call(*args, **kwargs)
-        except (HfHubHTTPError, *TRANSIENT) as error:
+        except (HfHubHTTPError, *TRANSIENT, LocalEntryNotFoundError) as caught:
+            # hf_hub_download raises a failed lookup of the file (a 429, a server error, a dropped connection), once its own brief retry fails, as LocalEntryNotFoundError, which is an EntryNotFoundError, and _download took that for a file the repo lacks, so a busy Hub could read as no manifest at all. It is judged by the failure it wraps and raised as that failure; one with no such cause is raised unchanged.
+            error = caught.__cause__ if isinstance(caught, LocalEntryNotFoundError) else caught
+            if not isinstance(error, (HfHubHTTPError, *TRANSIENT)):
+                raise
             delay = retry_delay(error, attempt)
             if delay is None:
-                raise
+                if error is caught:
+                    raise
+                raise error from None
             log.warning("%s attempt %d failed with %s; retrying", getattr(call, "__name__", "Hub call"), attempt + 1, failure(error))
             time.sleep(delay)
 
