@@ -15,7 +15,7 @@ The pipeline package, run as `python -m fed_products {run,probe,card,verify,squa
 - `minneapolis.py`: the Minneapolis archive's sitemap and pages.
 - `sections.py`: the sections and their order.
 - `text.py`: HTML to plain text, laid out as a browser shows it.
-- `http.py`: per-host pacing, bounded retries, bot-challenge detection.
+- `http.py`: per-host pacing, bounded retries, bot-challenge detection. Hugging Face calls are retried by `store.hub_read` instead.
 - `store.py`: Parquet partitions, and the Hub store's parent-commit fence.
 - `card.py`: the dataset card, rendered from the manifest.
 - `verify.py`: the publication check.

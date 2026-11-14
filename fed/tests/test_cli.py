@@ -379,3 +379,28 @@ def test_the_test_workflow_runs_the_suite_and_cannot_publish():
     assert all("permissions" not in job for job in workflow["jobs"].values()), "no job widens the read-only token, and none asks for an OIDC token"
     runs = [step["run"] for job in workflow["jobs"].values() for step in job["steps"] if "run" in step]
     assert runs[-2:] == ['pip install -q ".[test]"', "python -m pytest -q"]
+
+
+def test_a_busy_hub_during_a_squash_is_retried(monkeypatch):
+    from fed_products import store as store_module
+
+    waits, calls = [], []
+    monkeypatch.setattr(store_module.time, "sleep", waits.append)
+    busy = httpx.Response(429, request=httpx.Request("GET", "https://huggingface.co/api/datasets/x/y/commits/main"))
+
+    class FakeHfApi:
+        def __init__(self, token=None):
+            self.busy = 2
+
+        def list_repo_commits(self, repo_id, repo_type):
+            if self.busy:
+                self.busy -= 1
+                raise HfHubHTTPError("429 Too Many Requests: maximum time in concurrency queue reached", response=busy)
+            return [None] * (cli.SQUASH_AFTER_COMMITS + 1)
+
+        def super_squash_history(self, repo_id, repo_type, commit_message):
+            calls.append(repo_id)
+
+    monkeypatch.setattr(huggingface_hub, "HfApi", FakeHfApi)
+    assert cli.main(["squash", "--repo", "x/y"]) == 0
+    assert calls == ["x/y"] and waits == [60, 120]

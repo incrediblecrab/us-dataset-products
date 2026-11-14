@@ -12,7 +12,7 @@ from huggingface_hub.errors import HfHubHTTPError
 from .beige_book import REPO_ID, BeigeBookSource
 from .http import Fetcher, QuotaExhausted, Unavailable
 from .pipeline import CLEAN_STOPS, PROBE_KEY, PROBE_STATE_VERSION, Context, decide, probe_state, sync, utcnow, writer_identity
-from .store import CARD, SQUASH_AFTER_COMMITS
+from .store import CARD, SQUASH_AFTER_COMMITS, hub_read
 
 # What the Hub answers a Trusted Publishing exchange for a repo that has no publisher registered (measured September 23, 2026 in the CRS pipeline's workflow run 35935093031).
 NO_PUBLISHER = "No trusted publisher configured"
@@ -146,11 +146,12 @@ def cmd_squash(args):
     from huggingface_hub import HfApi
 
     api = HfApi()
-    commits = len(api.list_repo_commits(args.repo, repo_type="dataset"))
+    commits = len(hub_read(api.list_repo_commits, args.repo, repo_type="dataset"))
     if commits <= args.min_commits:
         print(f"{commits} commits; not squashed (threshold {args.min_commits})")
         return 0
-    api.super_squash_history(args.repo, repo_type="dataset", commit_message=f"Squash history of {commits} commits ({utcnow()})")
+    # Retried like a read: a squash whose answer was lost and is made again leaves the same one commit.
+    hub_read(api.super_squash_history, args.repo, repo_type="dataset", commit_message=f"Squash history of {commits} commits ({utcnow()})")
     print(f"squashed {commits} commits in {args.repo}")
     return 0
 
