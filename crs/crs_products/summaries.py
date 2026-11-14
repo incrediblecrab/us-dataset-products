@@ -429,7 +429,8 @@ def sync(ctx, source):
         except Exception as error:  # noqa: BLE001 - the Hub refused the final commit
             record.update(finished=False, stopped=f"{type(error).__name__}: {error}"[:300])
             log.exception("final commit failed")
-    return dict(record, commits=ctx.stats["commits"])
+    # When the last finished run began, as pipeline.sync reports it.
+    return dict(record, commits=ctx.stats["commits"], listed_at=(manifest.get("listing") or {}).get("at"))
 
 
 class _OutOfTime(Exception):

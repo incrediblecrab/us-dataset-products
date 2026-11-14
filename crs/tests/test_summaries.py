@@ -9,6 +9,7 @@ import re
 import pytest
 
 from crs_products import summaries
+from crs_products.http import Unavailable
 from crs_products.pipeline import Context
 from crs_products.store import LocalStore
 from crs_products.summaries import API, SummariesSource, partition_of, summary_id, summary_row, sync
@@ -289,6 +290,25 @@ def test_the_budget_stops_between_slices_and_the_next_run_resumes(tmp_path):
         SummariesSource.bounds = original
     assert second["finished"] and len(reads) == 16 and len(set(reads)) == 16
     assert verify(store, partition_of=partition_of, tally="bill_type")["problems"] == []
+
+
+def test_a_source_outage_keeps_what_the_run_committed_and_reports_when_the_last_finished_run_began(tmp_path):
+    """The scheduled runs of November 7 and 8, 2026 stopped on a Congress.gov ReadTimeout while re-reading old slices; the CLI decides from listed_at whether that fails the job."""
+    api, store = backfilled(tmp_path, BASE)
+    listed_at = store.read_manifest()["listing"]["at"]
+    age_manifest(store, reconciled_at="2026-01-01T00:00:00Z", collected_at="2026-01-01T00:00:00Z")
+    real = api.json
+
+    def timing_out(url, params=None):
+        if url.removeprefix(API).startswith("/summaries/") and (params or {}).get("sort") == "updateDate desc":
+            raise Unavailable("ReadTimeout from api.congress.gov/v3/summaries/93/hconres")
+        return real(url, params)
+
+    api.json = timing_out
+    record, _ = run(store, api)
+    assert (record["finished"], record["stopped"]) == (False, "Unavailable: ReadTimeout from api.congress.gov/v3/summaries/93/hconres")
+    assert record["listed_at"] == listed_at
+    assert store.read_manifest()["runs"][-1]["stopped"] == record["stopped"], "the stop stays on record for the probe and the card"
 
 
 def test_the_daily_check_rereads_the_slices_read_longest_ago(tmp_path):

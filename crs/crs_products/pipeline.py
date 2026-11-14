@@ -296,7 +296,8 @@ def sync(ctx, source):
         except Exception as error:  # noqa: BLE001 - the Hub refused the final commit
             run.update(finished=False, stopped=f"{type(error).__name__}: {error}"[:300])
             log.exception("final commit failed")
-    return dict(run, commits=ctx.stats["commits"])
+    # When the last run that listed every product began; the CLI reads it to decide whether a source outage is news.
+    return dict(run, commits=ctx.stats["commits"], listed_at=(manifest.get("listing") or {}).get("at"))
 
 
 def comparable(row):

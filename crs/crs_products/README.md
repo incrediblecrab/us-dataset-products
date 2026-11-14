@@ -14,7 +14,7 @@ The pipeline package, run as `python -m crs_products {run,probe,card,verify,squa
 - `summaries.py`: the summaries' listing reader and sync.
 - `constitution.py`: the Constitution Annotated's GovInfo adapter.
 - `card.py`, `summaries_card.py`, `constitution_card.py`: each dataset's card, rendered from its manifest.
-- `http.py`: per-host pacing, bounded retries, bot-challenge detection, the key sent only in a header.
+- `http.py`: per-host pacing, bounded retries, bot-challenge detection, the key sent only in a header. Hugging Face calls are retried by `store.hub_read` instead.
 - `store.py`: the products' schema, partitions, and the Hub store's parent-commit fence.
 - `text.py`: HTML and PDF to plain text.
 - `verify.py`: the publication check.

@@ -162,6 +162,31 @@ def test_run_exit_codes(actions, monkeypatch, tmp_path, stopped, code):
     assert outputs(actions)["commits"] == "3" and set(outputs(actions)) == OUTPUTS["run"]
 
 
+def hours_ago(hours):
+    from datetime import datetime, timedelta, timezone
+    from crs_products.pipeline import STAMP
+    return (datetime.now(timezone.utc) - timedelta(hours=hours)).strftime(STAMP)
+
+
+# Congress.gov timed out the summaries runs of November 7 and 8, 2026, 12 and 49 hours after the last finished run.
+@pytest.mark.parametrize("stopped, listed_hours_ago, code", [
+    ("Unavailable: ReadTimeout from api.congress.gov/v3/summaries/106/s", 12, 0),
+    ("Unavailable: ReadTimeout from api.congress.gov/v3/summaries/105/hr", 49, 0),
+    ("Unavailable: HTTP 503 from api.congress.gov/v3/summaries", cli.OUTAGE_GRACE_HOURS - 1, 0),
+    ("Unavailable: HTTP 503 from api.congress.gov/v3/summaries", cli.OUTAGE_GRACE_HOURS + 1, 1),
+    ("Unavailable: HTTP 503 from api.congress.gov/v3/summaries", None, 1),
+    ("QuotaExhausted: 429 from api.congress.gov", 1, 1),
+    ("Blocked: bot challenge at www.congress.gov/x.pdf", 1, 1),
+    ("RuntimeError: Unavailable: not a source outage", 1, 1),
+])
+def test_a_source_outage_fails_the_job_only_once_no_run_has_finished_for_three_days(actions, monkeypatch, tmp_path, capsys, stopped, listed_hours_ago, code):
+    listed_at = None if listed_hours_ago is None else hours_ago(listed_hours_ago)
+    monkeypatch.setattr(cli.summaries, "sync", lambda ctx, source: {"stopped": stopped, "finished": False, "commits": 3, "fetched": 9480, "listed_at": listed_at})
+    assert cli.main(["run", "--dataset", "summaries", "--local", str(tmp_path / "hub")]) == code
+    assert outputs(actions) == {"commits": "3", "more": "false"}, "an outage never starts the next run at once"
+    assert f"::warning::run stopped: {stopped}" in capsys.readouterr().out
+
+
 # sync() leaves fetched out of a deferred run's record.
 @pytest.mark.parametrize("stopped, fetched, more", [("budget", 4, "true"), ("budget", 0, "false"), (None, 4, "false"), ("superseded", 4, "false"), ("RuntimeError: boom", 4, "false"), ("deferred", None, "false")])
 def test_only_a_run_that_ran_out_of_budget_while_fetching_asks_for_the_next_run(actions, monkeypatch, tmp_path, stopped, fetched, more):
@@ -407,3 +432,28 @@ def test_the_test_workflow_runs_the_suite_and_cannot_publish():
     assert all("permissions" not in job for job in workflow["jobs"].values()), "no job widens the read-only token, and none asks for an OIDC token"
     runs = [step["run"] for job in workflow["jobs"].values() for step in job["steps"] if "run" in step]
     assert runs[-2:] == ['pip install -q ".[test]"', "python -m pytest -q"]
+
+
+def test_a_busy_hub_during_a_squash_is_retried(monkeypatch):
+    from crs_products import store as store_module
+
+    waits, calls = [], []
+    monkeypatch.setattr(store_module.time, "sleep", waits.append)
+    busy = httpx.Response(429, request=httpx.Request("GET", "https://huggingface.co/api/datasets/x/y/commits/main"))
+
+    class FakeHfApi:
+        def __init__(self, token=None):
+            self.busy = 2
+
+        def list_repo_commits(self, repo_id, repo_type):
+            if self.busy:
+                self.busy -= 1
+                raise HfHubHTTPError("429 Too Many Requests: maximum time in concurrency queue reached", response=busy)
+            return [None] * (cli.SQUASH_AFTER_COMMITS + 1)
+
+        def super_squash_history(self, repo_id, repo_type, commit_message):
+            calls.append(repo_id)
+
+    monkeypatch.setattr(huggingface_hub, "HfApi", FakeHfApi)
+    assert cli.main(["squash", "--repo", "x/y"]) == 0
+    assert calls == ["x/y"] and waits == [60, 120]

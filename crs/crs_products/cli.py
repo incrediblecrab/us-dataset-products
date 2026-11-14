@@ -12,14 +12,16 @@ from huggingface_hub.errors import HfHubHTTPError
 
 from . import constitution, summaries
 from .http import Fetcher, QuotaExhausted, Unavailable
-from .pipeline import CLEAN_STOPS, LISTING_WAITS, PROBE_KEY, PROBE_STATE_VERSION, Context, decide, probe_state, sync, utcnow, writer_identity
+from .pipeline import CLEAN_STOPS, LISTING_WAITS, PROBE_KEY, PROBE_STATE_VERSION, Context, age_hours, decide, probe_state, sync, utcnow, writer_identity
 from .source import CrsSource
-from .store import CARD, SQUASH_AFTER_COMMITS
+from .store import CARD, SQUASH_AFTER_COMMITS, hub_read
 
 DEFAULT_REPO = "incrediblecrab/us-crs-research-papers"
 REPOS = {"products": DEFAULT_REPO, "summaries": summaries.REPO_ID, "constitution": constitution.REPO_ID}
 # What the Hub answers a Trusted Publishing exchange for a repo that has no publisher registered (measured September 23, 2026 in workflow run 35935093031).
 NO_PUBLISHER = "No trusted publisher configured"
+# A run stopped because a source stayed unreachable through every retry (http.Unavailable) fails the job only once no run has finished for this long; before that it is a warning, and the next scheduled run reads again from where the manifest left off. Congress.gov timed out the summaries runs of November 7 and 8, 2026 after they had committed their progress, 12 and 49 hours after the last finished run, and the run of November 9 finished. The stop is still recorded in the manifest's runs, so the probe backs off as before. Three days because GitHub starts the daily runs 2.4 to 9.2 hours late (WORKFLOWS.md) and a finished run republishes its listing time only once it is 23 hours old.
+OUTAGE_GRACE_HOURS = 72
 
 def card_of(dataset):
     if dataset == "summaries":
@@ -102,6 +104,9 @@ def cmd_run(args):
         return 0
     if run["stopped"] in CLEAN_STOPS + ("deferred", "superseded"):
         return 0
+    if run["stopped"].startswith(f"{Unavailable.__name__}:") and age_hours(run.get("listed_at")) < OUTAGE_GRACE_HOURS:
+        warn(f"run stopped: {run['stopped']}. The last finished run began at {run['listed_at']} UTC, under {OUTAGE_GRACE_HOURS} hours ago, so the job passes and the next scheduled run tries again; it fails once no run has finished for {OUTAGE_GRACE_HOURS} hours.")
+        return 0
     warn(f"run stopped: {run['stopped']}")
     return 1
 
@@ -180,11 +185,12 @@ def cmd_squash(args):
     from huggingface_hub import HfApi
 
     api = HfApi()
-    commits = len(api.list_repo_commits(args.repo, repo_type="dataset"))
+    commits = len(hub_read(api.list_repo_commits, args.repo, repo_type="dataset"))
     if commits <= args.min_commits:
         print(f"{commits} commits; not squashed (threshold {args.min_commits})")
         return 0
-    api.super_squash_history(args.repo, repo_type="dataset", commit_message=f"Squash history of {commits} commits ({utcnow()})")
+    # Retried like a read: a squash whose answer was lost and is made again leaves the same one commit.
+    hub_read(api.super_squash_history, args.repo, repo_type="dataset", commit_message=f"Squash history of {commits} commits ({utcnow()})")
     print(f"squashed {commits} commits in {args.repo}")
     return 0
 

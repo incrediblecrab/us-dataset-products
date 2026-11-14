@@ -44,7 +44,8 @@ COLUMNS = SCHEMA.names
 MANIFEST = "manifest.json"
 CARD = "README.md"
 ROW_GROUP_BYTES = 64 << 20
-COMMIT_ATTEMPTS = 4
+# A Hub call that is retried (a commit, a read, the Trusted Publishing token trade a writer's first read makes) is tried this many times, waiting retry_delay between tries.
+HUB_ATTEMPTS = 4
 RETRYABLE = (408, 429, 500, 502, 503, 504)
 # Failures with no HTTP status that are still a busy Hub or network, so they are retried as well: a dropped connection or timeout, and a README check answered with a page that is not JSON. huggingface_hub 1.32.0 parses the validate-yaml body before it checks the status, so a busy Hub raises JSONDecodeError there, before anything is uploaded; the Fed scheduled run of September 27, 2026 stopped on one.
 TRANSIENT = (httpx.TransportError, json.JSONDecodeError)
@@ -53,6 +54,31 @@ CONFLICT = 412
 # The Hub's docs say the repo experience degrades after a few thousand commits; history is squashed past this many.
 SQUASH_AFTER_COMMITS = 1000
 log = logging.getLogger("crs_products")
+
+
+def retry_delay(error, attempt):
+    """Seconds to wait before trying a failed Hub call again, or None when it must be raised: its last attempt, or an HTTP status that is not RETRYABLE (a 404 for a file that does not exist, a refused token trade). Called with an HfHubHTTPError or a TRANSIENT failure."""
+    if attempt == HUB_ATTEMPTS - 1 or (isinstance(error, HfHubHTTPError) and failure(error) not in RETRYABLE):
+        return None
+    return 60 * (attempt + 1)
+
+
+def failure(error):
+    """The HTTP status of a Hub failure, or the name of a TRANSIENT one."""
+    return getattr(error.response, "status_code", None) if isinstance(error, HfHubHTTPError) else type(error).__name__
+
+
+def hub_read(call, *args, **kwargs):
+    """call(*args, **kwargs), retried as a commit is. huggingface_hub 1.32.0 does not retry dataset_info, get_paths_info, list_repo_files or the OIDC token trade at all, and retries a file download's 429 for under a minute; the scheduled summaries verify of November 11, 2026 stopped on one 429 from dataset_info ("maximum time in concurrency queue reached")."""
+    for attempt in range(HUB_ATTEMPTS):
+        try:
+            return call(*args, **kwargs)
+        except (HfHubHTTPError, *TRANSIENT) as error:
+            delay = retry_delay(error, attempt)
+            if delay is None:
+                raise
+            log.warning("%s attempt %d failed with %s; retrying", getattr(call, "__name__", "Hub call"), attempt + 1, failure(error))
+            time.sleep(delay)
 
 
 class Superseded(RuntimeError):
@@ -231,8 +257,8 @@ class HubStore(_Staging):
     def __init__(self, repo_id, workdir=None, token=None, card=None, api=None, write=None):
         self.repo_id = repo_id
         self.api = api or HfApi(token=token)
-        # Before the scratch directory exists, so a Hub that cannot be reached leaves nothing behind.
-        info = self.api.dataset_info(repo_id)
+        # Before the scratch directory exists, so a Hub that cannot be reached leaves nothing behind. With token=None this first request also trades the job's OIDC token, so the trade is retried with it.
+        info = hub_read(self.api.dataset_info, repo_id)
         self.revision = info.sha
         self.card_data = info.card_data.to_dict() if info.card_data else {}
         super().__init__(workdir, card, write)
@@ -240,7 +266,7 @@ class HubStore(_Staging):
 
     def _download(self, repo_path):
         try:
-            local = hf_hub_download(self.repo_id, repo_path, repo_type="dataset", revision=self.revision, local_dir=self.dir / "download", token=self.api.token)
+            local = hub_read(hf_hub_download, self.repo_id, repo_path, repo_type="dataset", revision=self.revision, local_dir=self.dir / "download", token=self.api.token)
         except (EntryNotFoundError, RemoteEntryNotFoundError):
             return None
         self.measure()
@@ -265,22 +291,24 @@ class HubStore(_Staging):
 
     def read_columns(self, repo_path, columns):
         """Reads only the named columns, by HTTP range requests, so verification never downloads the text."""
-        fs = HfFileSystem(token=self.api.token)
-        with fs.open(f"datasets/{self.repo_id}@{self.revision}/{repo_path}", "rb") as handle:
-            return pq.read_table(handle, columns=columns).to_pydict()
+        def read():
+            fs = HfFileSystem(token=self.api.token)
+            with fs.open(f"datasets/{self.repo_id}@{self.revision}/{repo_path}", "rb") as handle:
+                return pq.read_table(handle, columns=columns).to_pydict()
+        return hub_read(read)
 
     def file_sha256s(self, repo_paths):
         out = {}
         paths = list(repo_paths)
         for start in range(0, len(paths), 100):
-            for info in self.api.get_paths_info(self.repo_id, paths[start:start + 100], repo_type="dataset", revision=self.revision):
+            for info in hub_read(self.api.get_paths_info, self.repo_id, paths[start:start + 100], repo_type="dataset", revision=self.revision):
                 lfs = getattr(info, "lfs", None)
                 if lfs is not None:
                     out[info.path] = lfs.sha256
         return out
 
     def list_files(self, prefix=""):
-        return sorted(path for path in self.api.list_repo_files(self.repo_id, repo_type="dataset", revision=self.revision) if path.startswith(prefix))
+        return sorted(path for path in hub_read(self.api.list_repo_files, self.repo_id, repo_type="dataset", revision=self.revision) if path.startswith(prefix))
 
     def read_text(self, repo_path):
         local = self._download(repo_path)
@@ -297,25 +325,24 @@ class HubStore(_Staging):
             return None
         if self.superseded:
             raise self.superseded
-        for attempt in range(COMMIT_ATTEMPTS):
+        for attempt in range(HUB_ATTEMPTS):
             operations = [CommitOperationAdd(path_in_repo=repo_path, path_or_fileobj=str(local)) for repo_path, local in sorted(self.staged.items())]
             try:
                 oid = self.api.create_commit(self.repo_id, operations=operations, commit_message=message, repo_type="dataset", parent_commit=self.revision).oid
                 break
             except (HfHubHTTPError, *TRANSIENT) as error:
-                http = isinstance(error, HfHubHTTPError)
-                status = getattr(error.response, "status_code", None) if http else None
-                if status == CONFLICT:
+                if failure(error) == CONFLICT:
                     oid = self._landed()
                     if oid:
                         log.warning("commit %r had already landed as %s", message[:60], oid[:12])
                         break
                     self.superseded = Superseded(f"{self.repo_id} has a commit this run did not write (its last commit was {self.revision[:12]})")
                     raise self.superseded from None
-                if attempt == COMMIT_ATTEMPTS - 1 or (http and status not in RETRYABLE):
+                delay = retry_delay(error, attempt)
+                if delay is None:
                     raise
-                log.warning("commit attempt %d failed with %s; retrying", attempt + 1, f"HTTP {status}" if http else type(error).__name__)
-                time.sleep(60 * (attempt + 1))
+                log.warning("commit attempt %d failed with %s; retrying", attempt + 1, failure(error))
+                time.sleep(delay)
         self.revision = oid
         self.clear()
         return oid
@@ -325,9 +352,9 @@ class HubStore(_Staging):
         staged = self.staged.get(MANIFEST)
         if staged is None:
             return None
-        head = self.api.dataset_info(self.repo_id).sha
+        head = hub_read(self.api.dataset_info, self.repo_id).sha
         data = staged.read_bytes()
-        for info in self.api.get_paths_info(self.repo_id, [MANIFEST], repo_type="dataset", revision=head):
+        for info in hub_read(self.api.get_paths_info, self.repo_id, [MANIFEST], repo_type="dataset", revision=head):
             lfs = getattr(info, "lfs", None)
             same = lfs.sha256 == hashlib.sha256(data).hexdigest() if lfs else getattr(info, "blob_id", None) == git_blob_sha1(data)
             if same:
