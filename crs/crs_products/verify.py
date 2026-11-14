@@ -3,6 +3,7 @@
 import math
 from collections import Counter
 
+from .http import Unavailable
 from .pipeline import MAX_ATTEMPTS
 from .source import listing_problem, listing_summary
 from .store import partition_of, partition_path
@@ -64,7 +65,14 @@ def verify(store, source=None, partition_of=partition_of, tally="text_source", l
         f"{tally}s": dict(sorted(tallies.items())),
     }
     if source is not None:
-        report["live"] = (live or live_diff)(manifest, stored, source, problems, partition_of)
+        # A source that stays unreachable through every retry says nothing about what the Hub holds, so it is a warning and the checks against the manifest decide; a run stopped by the same outage passes until cli.OUTAGE_GRACE_HOURS, and would otherwise fail here instead.
+        before = len(problems)
+        try:
+            report["live"] = (live or live_diff)(manifest, stored, source, problems, partition_of)
+        except Unavailable as error:
+            del problems[before:]
+            report["live"] = {"status": "unavailable", "error": str(error)}
+            report["live"]["warning"] = f"live comparison skipped: {Unavailable.__name__}: {error}"
         if report["live"].get("warning"):
             report["warnings"] = [report["live"]["warning"]]
     report["problems"] = problems

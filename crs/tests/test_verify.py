@@ -288,3 +288,21 @@ def test_the_verify_command_exits_1_on_a_planted_defect(synced):
     PLANTS["sha256"][0](store)
     planted = run_cli("verify", "--local", str(store.root))
     assert planted.returncode == 1 and '"R40: data/R40.parquet has sha256' in planted.stdout
+
+
+def test_a_source_outage_during_the_live_comparison_is_a_warning_and_the_hub_checks_still_decide(synced):
+    """crs-pipeline.yml and crs-constitution.yml run verify --live after a commit, and an outage-stopped run commits its record; the same outage must not fail the job here before cli.OUTAGE_GRACE_HOURS."""
+    from crs_products.http import Unavailable
+
+    store, state = synced
+
+    class Down(ScriptedSource):
+        def list_all(self):
+            raise Unavailable("ReadTimeout from api.congress.gov/v3/crsreport")
+
+    report = verify(store, Down(state))
+    assert report["problems"] == [] and report["live"]["status"] == "unavailable"
+    assert report["warnings"] == ["live comparison skipped: Unavailable: ReadTimeout from api.congress.gov/v3/crsreport"]
+    PLANTS["sha256"][0](store)
+    assert verify(store, Down(state))["problems"], "a Hub defect still fails while the source is down"
+

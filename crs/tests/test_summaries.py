@@ -309,6 +309,8 @@ def test_a_source_outage_keeps_what_the_run_committed_and_reports_when_the_last_
     assert (record["finished"], record["stopped"]) == (False, "Unavailable: ReadTimeout from api.congress.gov/v3/summaries/93/hconres")
     assert record["listed_at"] == listed_at
     assert store.read_manifest()["runs"][-1]["stopped"] == record["stopped"], "the stop stays on record for the probe and the card"
+    # crs-summaries.yml verifies after any commit, and an outage-stopped run commits its record; what it left must verify.
+    assert verify(store, partition_of=partition_of, tally="bill_type")["problems"] == []
 
 
 def test_the_daily_check_rereads_the_slices_read_longest_ago(tmp_path):
