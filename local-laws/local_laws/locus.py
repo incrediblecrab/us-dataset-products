@@ -7,6 +7,7 @@ from collections import Counter, defaultdict
 import pyarrow.parquet as pq
 
 from .census import SourceChanged
+from .store import hub_read
 
 REPO_ID = "LocalLaws/LOCUS-v1"
 # The dataset's head commit on September 25, 2026 (last modified June 20, 2026). Reading a pinned commit keeps the crosswalk reproducible.
@@ -103,7 +104,7 @@ def latest():
     """The Hub's current HEAD for LOCUS-v1, for the scheduled stale-pin check. The build still reads REVISION until a person reviews a newer release."""
     from huggingface_hub import HfApi
 
-    info = HfApi(token=False).dataset_info(REPO_ID)
+    info = hub_read(HfApi(token=False).dataset_info, REPO_ID)
     modified = getattr(info, "last_modified", None)
     return {"repo_id": REPO_ID, "sha": info.sha, "last_modified": modified.isoformat() if modified else None, "pinned": REVISION}
 
@@ -113,7 +114,7 @@ def stated_rows(api=None):
     from huggingface_hub import HfApi
 
     api = api or HfApi(token=False)
-    card = api.dataset_info(REPO_ID, revision=REVISION).card_data.to_dict()
+    card = hub_read(api.dataset_info, REPO_ID, revision=REVISION).card_data.to_dict()
     if card.get("license") != LICENSE:
         raise SourceChanged(f"LOCUS's license is {card.get('license')!r}, not {LICENSE}: the card's License section needs review")
     return sum(split["num_examples"] for split in card["dataset_info"]["splits"])
@@ -125,10 +126,10 @@ def download(directory, api=None):
 
     api = api or HfApi(token=False)
     stated = stated_rows(api)
-    files = sorted(path for path in api.list_repo_files(REPO_ID, repo_type="dataset", revision=REVISION) if path.startswith("data/") and path.endswith(".parquet"))
+    files = sorted(path for path in hub_read(api.list_repo_files, REPO_ID, repo_type="dataset", revision=REVISION) if path.startswith("data/") and path.endswith(".parquet"))
     if not files:
         raise SourceChanged(f"no parquet files in {REPO_ID} at {REVISION}")
-    paths = [api.hf_hub_download(REPO_ID, path, repo_type="dataset", revision=REVISION, local_dir=directory) for path in files]
+    paths = [hub_read(api.hf_hub_download, REPO_ID, path, repo_type="dataset", revision=REVISION, local_dir=directory) for path in files]
     return paths, stated
 
 

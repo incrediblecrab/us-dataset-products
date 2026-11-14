@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import httpx
 import pyarrow as pa
 import pytest
-from huggingface_hub.errors import EntryNotFoundError, HfHubHTTPError
+from huggingface_hub.errors import EntryNotFoundError, HfHubHTTPError, LocalEntryNotFoundError, RemoteEntryNotFoundError
 
 from conftest import NY_SAMPLE, FakeFetcher
 from local_laws import store as store_module
@@ -20,6 +20,26 @@ from local_laws.verify import verify
 def http_error(status):
     response = httpx.Response(status, request=httpx.Request("POST", "https://huggingface.co/api/datasets/x/y/commit/main"))
     return HfHubHTTPError(f"{status} from the fake Hub", response=response)
+
+
+def oidc_error(status):
+    """What the Trusted Publishing token trade raises when GitHub's id-token endpoint fails: the trade happens inside the first authenticated Hub request."""
+    response = httpx.Response(status, request=httpx.Request("GET", "https://run-actions-2-azure-eastus.actions.githubusercontent.com/229//idtoken/x/y?audience=https%3A%2F%2Fhuggingface.co"))
+    return HfHubHTTPError(f"Server error '{status}' for the id-token endpoint", response=response)
+
+
+def busy(api, name, *errors):
+    """Makes api.name raise each planted error in turn before it answers as before. Returns the list of calls it saw."""
+    real, planted, calls = getattr(api, name), list(errors), []
+
+    def call(*args, **kwargs):
+        calls.append(name)
+        if planted:
+            raise planted.pop(0)
+        return real(*args, **kwargs)
+
+    setattr(api, name, call)
+    return calls
 
 
 class FakeApi:
@@ -235,3 +255,120 @@ def test_a_commit_that_writes_a_tolerated_path_is_superseded_by_any_other_writer
     with pytest.raises(Superseded):
         hub.commit({"sources/harvest.zip": str(tmp_path / "h.zip")}, "harvest")
     assert api.files["sources/harvest.zip"] == b"newer reading"
+
+
+@pytest.mark.parametrize("method, create, errors", [
+    # The CRS scheduled summaries verify of November 11, 2026: dataset_info answered "429 Too Many Requests ... maximum time in concurrency queue reached".
+    ("dataset_info", False, (http_error(429), http_error(429))),
+    # A writer's first request trades the job's OIDC token; GitHub's id-token endpoint answered 503 to the scotus scheduled run of November 2, 2026.
+    ("create_repo", True, (oidc_error(503),)),
+    ("dataset_info", False, (oidc_error(503),)),
+    ("dataset_info", False, (httpx.ReadTimeout("planted"), http_error(502), http_error(504))),
+], ids=["hub-429", "oidc-503-at-create", "oidc-503-at-info", "timeout-502-504"])
+def test_a_busy_hub_at_open_is_retried(no_sleep, method, create, errors):
+    api = FakeApi()
+    calls = busy(api, method, *errors)
+    hub = HubStore("x/y", api=api, create=create)
+    assert hub.revision == "commit-0" and len(calls) == len(errors) + 1
+    assert no_sleep == [60, 120, 180][:len(errors)]
+
+
+@pytest.mark.parametrize("method, create, status", [("dataset_info", False, 401), ("dataset_info", False, 404), ("create_repo", True, 403)])
+def test_a_refusal_at_open_is_raised_at_once(monkeypatch, method, create, status):
+    """A missing repo or a refused token trade (an unregistered Trusted Publisher) is not a busy Hub: retrying it would only delay the error the owner must see."""
+    monkeypatch.setattr(store_module.time, "sleep", lambda seconds: pytest.fail("a refusal is not retried"))
+    api = FakeApi()
+    calls = busy(api, method, http_error(status))
+    with pytest.raises(HfHubHTTPError):
+        HubStore("x/y", api=api, create=create)
+    assert calls == [method]
+
+
+def test_a_hub_that_cannot_be_reached_is_tried_four_times(no_sleep):
+    api = FakeApi()
+    calls = busy(api, "dataset_info", *[httpx.ConnectError("planted: the Hub cannot be reached")] * 4)
+    with pytest.raises(httpx.ConnectError):
+        HubStore("x/y", api=api)
+    assert len(calls) == 4 and no_sleep == [60, 120, 180]
+
+
+def test_a_busy_download_is_retried_and_a_missing_file_is_not(no_sleep):
+    api = FakeApi({MANIFEST: b'{"build": 1}\n'})
+    hub = HubStore("x/y", api=api)
+    calls = busy(api, "hf_hub_download", http_error(429), http_error(429))
+    assert hub.read_text(MANIFEST) == '{"build": 1}\n'
+    assert len(calls) == 3 and no_sleep == [60, 120]
+    no_sleep.clear()
+    calls = busy(api, "hf_hub_download")
+    assert hub.read_text("absent.json") is None and calls == ["hf_hub_download"], "EntryNotFoundError is a missing file, not a busy Hub"
+    missing = RemoteEntryNotFoundError("planted 404", response=httpx.Response(404, request=httpx.Request("GET", "https://huggingface.co/datasets/x/y/resolve/commit-0/absent.json")))
+    calls = busy(api, "hf_hub_download", missing)
+    assert hub.read_bytes("absent.json") is None and calls == ["hf_hub_download"] and no_sleep == []
+
+
+def test_busy_listings_are_retried(no_sleep):
+    api = FakeApi({"data/x.parquet": b"PAR1"})
+    hub = HubStore("x/y", api=api)
+    files = busy(api, "list_repo_files", http_error(503))
+    paths = busy(api, "get_paths_info", httpx.ConnectError("planted"))
+    assert hub.list_files() == [".gitattributes", "data/x.parquet"]
+    assert hub.file_sha256s(["data/x.parquet"]) == {"data/x.parquet": hashlib.sha256(b"PAR1").hexdigest()}
+    assert (len(files), len(paths), no_sleep) == (2, 2, [60, 60])
+
+
+def test_a_busy_tree_listing_while_checking_another_writer_is_retried(tmp_path, no_sleep):
+    """list_repo_tree pages lazily, so a busy page is raised while the listing is read, not when it is asked for."""
+    api = FakeApi({MANIFEST: b'{"build": 0}\n'})
+    hub = HubStore("x/y", api=api, tolerate=("sources/harvest.zip",))
+    api.other_writer("sources/harvest.zip", b"newer reading")
+    real, planted, calls = api.list_repo_tree, [http_error(503)], []
+
+    def list_repo_tree(*args, **kwargs):
+        calls.append("list_repo_tree")
+        if planted:
+            raise planted.pop(0)
+        yield from real(*args, **kwargs)
+
+    api.list_repo_tree = list_repo_tree
+    assert hub.commit(local_files(tmp_path), "build") == "commit-2"
+    assert len(calls) == 3 and no_sleep == [60], "two trees read, the first twice"
+
+
+def test_busy_reads_while_checking_a_lost_response_are_retried(tmp_path, no_sleep):
+    api = FakeApi()
+    api.failures = [(http_error(502), True)]
+    hub = HubStore("x/y", api=api)
+    heads = busy(api, "dataset_info", http_error(429))
+    paths = busy(api, "get_paths_info", json.JSONDecodeError("Expecting value", "", 0))
+    assert hub.commit(local_files(tmp_path), "build") == "commit-1" and api.commits == 1
+    assert (len(heads), len(paths), no_sleep) == (2, 2, [60, 60, 60]), "the commit's own wait, then one for each read"
+
+
+def busy_lookup(error):
+    """What hf_hub_download 1.32.0 raises when its HEAD request fails and its own brief retry gives up: LocalEntryNotFoundError, chained from the failure."""
+    try:
+        raise error
+    except (HfHubHTTPError, httpx.TransportError) as cause:
+        try:
+            raise LocalEntryNotFoundError("An error happened while trying to locate the file on the Hub") from cause
+        except LocalEntryNotFoundError as lookup:
+            return lookup
+
+
+def test_a_busy_file_lookup_is_retried_and_never_read_as_a_missing_file(no_sleep):
+    api = FakeApi({MANIFEST: b'{"build": 1}\n', "README.md": b"card\n", "other.json": b"{}\n", "sources/nfip.zip": b"zip"})
+    hub = HubStore("x/y", api=api)
+    calls = busy(api, "hf_hub_download", busy_lookup(http_error(429)), busy_lookup(httpx.ConnectError("planted")))
+    assert hub.read_text(MANIFEST) == '{"build": 1}\n' and len(calls) == 3 and no_sleep == [60, 120]
+    no_sleep.clear()
+    calls = busy(api, "hf_hub_download", *[busy_lookup(http_error(503)) for _ in range(4)])
+    with pytest.raises(HfHubHTTPError) as raised:
+        hub.read_bytes("sources/nfip.zip")
+    assert raised.value.response.status_code == 503 and len(calls) == 4 and no_sleep == [60, 120, 180], "retries run out on the busy Hub, not on a file said to be missing"
+    no_sleep.clear()
+    calls = busy(api, "hf_hub_download", busy_lookup(http_error(403)))
+    with pytest.raises(HfHubHTTPError):
+        hub.read_text("other.json")
+    assert len(calls) == 1 and no_sleep == [], "a refusal behind the lookup is raised at once"
+    calls = busy(api, "hf_hub_download", LocalEntryNotFoundError("planted: offline and not in the cache"))
+    assert hub.read_text("README.md") is None and len(calls) == 1 and no_sleep == [], "a lookup with no Hub failure behind it is raised unchanged, as before"

@@ -16,19 +16,51 @@ import httpx
 import pyarrow as pa
 import pyarrow.parquet as pq
 from huggingface_hub import CommitOperationAdd, HfApi
-from huggingface_hub.errors import EntryNotFoundError, HfHubHTTPError, RemoteEntryNotFoundError
+from huggingface_hub.errors import EntryNotFoundError, HfHubHTTPError, LocalEntryNotFoundError, RemoteEntryNotFoundError
 
 MANIFEST = "manifest.json"
 CARD = "README.md"
 # The Hub adds this to every new repo.
 HUB_FILES = (".gitattributes",)
-COMMIT_ATTEMPTS = 4
+# A Hub call that is retried (a commit, a read, the Trusted Publishing token trade a writer's first request makes) is tried this many times, waiting retry_delay between tries.
+HUB_ATTEMPTS = 4
 RETRYABLE = (408, 429, 500, 502, 503, 504)
 # Failures with no HTTP status that are still a busy Hub or network, so they are retried as well: a dropped connection or timeout, and a README check answered with a page that is not JSON. huggingface_hub 1.32.0 parses the validate-yaml body before it checks the status, so a busy Hub raises JSONDecodeError there, before anything is uploaded; the Fed scheduled run of September 27, 2026 stopped on one.
 TRANSIENT = (httpx.TransportError, json.JSONDecodeError)
 # Measured September 23, 2026 on a scratch dataset for the CRS pipeline: a commit whose parent_commit is no longer the branch head answers 412 Precondition Failed.
 CONFLICT = 412
 log = logging.getLogger("local_laws")
+
+
+def retry_delay(error, attempt):
+    """Seconds to wait before trying a failed Hub call again, or None when it must be raised: its last attempt, or an HTTP status that is not RETRYABLE (a 404 for a file that does not exist, a refused token trade). Called with an HfHubHTTPError or a TRANSIENT failure."""
+    if attempt == HUB_ATTEMPTS - 1 or (isinstance(error, HfHubHTTPError) and failure(error) not in RETRYABLE):
+        return None
+    return 60 * (attempt + 1)
+
+
+def failure(error):
+    """The HTTP status of a Hub failure, or the name of a TRANSIENT one."""
+    return getattr(error.response, "status_code", None) if isinstance(error, HfHubHTTPError) else type(error).__name__
+
+
+def hub_read(call, *args, **kwargs):
+    """call(*args, **kwargs), retried as a commit is. huggingface_hub 1.32.0 does not retry dataset_info, get_paths_info, list_repo_files, list_repo_tree, create_repo or the OIDC token trade at all, and retries a file download's 429 for under a minute; the CRS scheduled summaries verify of November 11, 2026 stopped on one 429 from dataset_info ("maximum time in concurrency queue reached")."""
+    for attempt in range(HUB_ATTEMPTS):
+        try:
+            return call(*args, **kwargs)
+        except (HfHubHTTPError, *TRANSIENT, LocalEntryNotFoundError) as caught:
+            # hf_hub_download raises a failed lookup of the file (a 429, a server error, a dropped connection), once its own brief retry fails, as LocalEntryNotFoundError, which is an EntryNotFoundError, and _download took that for a file the repo lacks, so a busy Hub could read as no manifest, no stored FEMA files or a table verify skips. It is judged by the failure it wraps and raised as that failure; one with no such cause is raised unchanged.
+            error = caught.__cause__ if isinstance(caught, LocalEntryNotFoundError) else caught
+            if not isinstance(error, (HfHubHTTPError, *TRANSIENT)):
+                raise
+            delay = retry_delay(error, attempt)
+            if delay is None:
+                if error is caught:
+                    raise
+                raise error from None
+            log.warning("%s attempt %d failed with %s; retrying", getattr(call, "__name__", "Hub call"), attempt + 1, failure(error))
+            time.sleep(delay)
 
 
 class Superseded(RuntimeError):
@@ -96,14 +128,15 @@ class HubStore:
         self.repo_id = repo_id
         self.api = api or HfApi(token=token)
         self.tolerate = frozenset(tolerate)
+        # With token=None the first request also trades the job's OIDC token (create_repo for a writer, else dataset_info), so the trade is retried with it; GitHub's id-token endpoint answered 503 to the scotus scheduled run of November 2, 2026.
         if create:
-            self.api.create_repo(repo_id, repo_type="dataset", private=False, exist_ok=True)
-        self.revision = self.api.dataset_info(repo_id).sha
+            hub_read(self.api.create_repo, repo_id, repo_type="dataset", private=False, exist_ok=True)
+        self.revision = hub_read(self.api.dataset_info, repo_id).sha
         self.superseded = None
 
     def _download(self, repo_path, directory):
         try:
-            return Path(self.api.hf_hub_download(self.repo_id, repo_path, repo_type="dataset", revision=self.revision, local_dir=directory))
+            return Path(hub_read(self.api.hf_hub_download, self.repo_id, repo_path, repo_type="dataset", revision=self.revision, local_dir=directory))
         except (EntryNotFoundError, RemoteEntryNotFoundError):
             return None
 
@@ -123,12 +156,12 @@ class HubStore:
             return pq.read_table(local) if local else None
 
     def list_files(self):
-        return sorted(self.api.list_repo_files(self.repo_id, repo_type="dataset", revision=self.revision))
+        return sorted(hub_read(self.api.list_repo_files, self.repo_id, repo_type="dataset", revision=self.revision))
 
     def file_sha256s(self, repo_paths):
         """SHA-256 of each LFS file, as the Hub reports it, so checking a file never downloads it."""
         out = {}
-        for info in self.api.get_paths_info(self.repo_id, list(repo_paths), repo_type="dataset", revision=self.revision):
+        for info in hub_read(self.api.get_paths_info, self.repo_id, list(repo_paths), repo_type="dataset", revision=self.revision):
             lfs = getattr(info, "lfs", None)
             if lfs is not None:
                 out[info.path] = lfs.sha256
@@ -139,40 +172,43 @@ class HubStore:
         if self.superseded:
             raise self.superseded
         operations = [CommitOperationAdd(path_in_repo=repo_path, path_or_fileobj=str(local)) for repo_path, local in sorted(files.items())]
-        for attempt in range(COMMIT_ATTEMPTS):
+        for attempt in range(HUB_ATTEMPTS):
             try:
                 oid = self.api.create_commit(self.repo_id, operations=operations, commit_message=message, repo_type="dataset", parent_commit=self.revision).oid
                 break
             except (HfHubHTTPError, *TRANSIENT) as error:
-                http = isinstance(error, HfHubHTTPError)
-                status = getattr(error.response, "status_code", None) if http else None
+                status = failure(error)
                 if status == CONFLICT:
                     oid = self._landed(files.get(MANIFEST))
                     if oid:
                         log.warning("commit %r had already landed as %s", message[:60], oid[:12])
                         break
                     head = self._tolerated_head(files)
-                    if head and attempt < COMMIT_ATTEMPTS - 1:
+                    if head and attempt < HUB_ATTEMPTS - 1:
                         log.warning("%s changed only %s since %s; committing on top of %s", self.repo_id, sorted(self.tolerate), self.revision[:12], head[:12])
                         self.revision = head
                         continue
                     self.superseded = Superseded(f"{self.repo_id} has a commit this run did not write (its last commit was {self.revision[:12]})")
                     raise self.superseded from None
-                if attempt == COMMIT_ATTEMPTS - 1 or (http and status not in RETRYABLE):
+                delay = retry_delay(error, attempt)
+                if delay is None:
                     raise
-                log.warning("commit attempt %d failed with %s; retrying", attempt + 1, f"HTTP {status}" if http else type(error).__name__)
-                time.sleep(60 * (attempt + 1))
+                log.warning("commit attempt %d failed with %s; retrying", attempt + 1, f"HTTP {status}" if isinstance(error, HfHubHTTPError) else status)
+                time.sleep(delay)
         self.revision = oid
         return oid
 
     def _tree(self, revision):
-        return {entry.path: getattr(entry, "blob_id", None) for entry in self.api.list_repo_tree(self.repo_id, recursive=True, repo_type="dataset", revision=revision) if hasattr(entry, "blob_id")}
+        def list_repo_tree():
+            # list_repo_tree pages lazily, so the listing is read inside the retried call, where a busy page is raised.
+            return list(self.api.list_repo_tree(self.repo_id, recursive=True, repo_type="dataset", revision=revision))
+        return {entry.path: getattr(entry, "blob_id", None) for entry in hub_read(list_repo_tree) if hasattr(entry, "blob_id")}
 
     def _tolerated_head(self, files):
         """The head commit if every change since this store's revision is to a tolerated path that this commit does not write, else None."""
         if not self.tolerate or self.tolerate & set(files):
             return None
-        head = self.api.dataset_info(self.repo_id).sha
+        head = hub_read(self.api.dataset_info, self.repo_id).sha
         before, after = self._tree(self.revision), self._tree(head)
         changed = {path for path in before.keys() | after.keys() if before.get(path) != after.get(path)}
         return head if changed and changed <= self.tolerate else None
@@ -181,9 +217,9 @@ class HubStore:
         """The head commit if it already holds exactly this manifest, else None."""
         if manifest is None:
             return None
-        head = self.api.dataset_info(self.repo_id).sha
+        head = hub_read(self.api.dataset_info, self.repo_id).sha
         data = Path(manifest).read_bytes()
-        for info in self.api.get_paths_info(self.repo_id, [MANIFEST], repo_type="dataset", revision=head):
+        for info in hub_read(self.api.get_paths_info, self.repo_id, [MANIFEST], repo_type="dataset", revision=head):
             lfs = getattr(info, "lfs", None)
             if (lfs.sha256 == hashlib.sha256(data).hexdigest()) if lfs else getattr(info, "blob_id", None) == git_blob_sha1(data):
                 return head

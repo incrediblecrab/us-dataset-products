@@ -4,10 +4,13 @@ import re
 from collections import Counter
 from types import SimpleNamespace
 
+import httpx
 import pytest
+from huggingface_hub.errors import HfHubHTTPError
 
 from conftest import EXPECTED, LOCUS, units_rows, write_locus
 from local_laws import locus
+from local_laws import store as store_module
 from local_laws.census import SourceChanged
 
 
@@ -110,3 +113,55 @@ def test_the_license_on_locus_s_card_is_checked():
     assert locus.stated_rows(api(locus.LICENSE)) == 12
     with pytest.raises(SourceChanged, match="LOCUS's license is 'cc-by-4.0'"):
         locus.stated_rows(api("cc-by-4.0"))
+
+
+def hub_error(status):
+    response = httpx.Response(status, request=httpx.Request("GET", f"https://huggingface.co/api/datasets/{locus.REPO_ID}/revision/{locus.REVISION}"))
+    return HfHubHTTPError(f"{status} from the fake Hub", response=response)
+
+
+class BusyLocus:
+    """LOCUS's repo on a Hub that answers each read once with a planted failure, then as it should."""
+
+    def __init__(self):
+        self.calls = []
+        self.planted = {"dataset_info": hub_error(429), "list_repo_files": httpx.ConnectError("planted"), "hf_hub_download": hub_error(503)}
+
+    def answer(self, name):
+        self.calls.append(name)
+        if name in self.planted:
+            raise self.planted.pop(name)
+
+    def dataset_info(self, repo_id, revision=None):
+        self.answer("dataset_info")
+        card = {"license": locus.LICENSE, "dataset_info": {"splits": [{"num_examples": 5}, {"num_examples": 7}]}}
+        return SimpleNamespace(sha=revision or "head", last_modified=None, card_data=SimpleNamespace(to_dict=lambda: card))
+
+    def list_repo_files(self, repo_id, repo_type, revision):
+        self.answer("list_repo_files")
+        return ["README.md", "data/a.parquet"]
+
+    def hf_hub_download(self, repo_id, path, repo_type, revision, local_dir):
+        self.answer("hf_hub_download")
+        return f"{local_dir}/{path}"
+
+
+def test_busy_reads_of_locus_are_retried(monkeypatch, tmp_path):
+    waits = []
+    monkeypatch.setattr(store_module.time, "sleep", waits.append)
+    api = BusyLocus()
+    assert locus.download(str(tmp_path), api=api) == ([f"{tmp_path}/data/a.parquet"], 12)
+    assert api.calls == ["dataset_info"] * 2 + ["list_repo_files"] * 2 + ["hf_hub_download"] * 2 and waits == [60, 60, 60]
+    import huggingface_hub
+
+    monkeypatch.setattr(huggingface_hub, "HfApi", lambda token: BusyLocus())
+    assert locus.latest()["sha"] == "head" and waits == [60] * 4, "the stale-pin check's read is retried too"
+
+
+def test_a_refused_read_of_locus_is_raised_at_once(monkeypatch):
+    monkeypatch.setattr(store_module.time, "sleep", lambda seconds: pytest.fail("a refusal is not retried"))
+    api = BusyLocus()
+    api.planted["dataset_info"] = hub_error(404)
+    with pytest.raises(HfHubHTTPError):
+        locus.stated_rows(api)
+    assert api.calls == ["dataset_info"]
