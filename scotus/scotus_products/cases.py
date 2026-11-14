@@ -26,7 +26,7 @@ from .cli import step_outputs, trusted_publishing
 from .http import Blocked, Fetcher, QuotaExhausted, Unavailable
 from .markup import field, parse, render, resolve, squash
 from .sources import BASE, COLLECTIONS, iso_date, long_date, repo_id, reread_url, shown_terms
-from .store import MANIFEST, HubStore, LocalStore, schema_differences, sha256_file
+from .store import MANIFEST, HubStore, LocalStore, hub_read, schema_differences, sha256_file
 
 REPO_ID = repo_id("cases")
 # Bumped when row assembly changes, so every term is assembled again; its docket pages are carried over, not fetched again.
@@ -139,7 +139,7 @@ def source_manifest(args, collection):
         path = source_root(args.sources_local, collection) / MANIFEST
         return json.loads(path.read_text()) if path.exists() else None
     try:
-        path = hf_hub_download(COLLECTIONS[collection].repo_id, f"{collection}/{MANIFEST}", repo_type="dataset", token=False)
+        path = hub_read(hf_hub_download, COLLECTIONS[collection].repo_id, f"{collection}/{MANIFEST}", repo_type="dataset", token=False)
     except (EntryNotFoundError, RemoteEntryNotFoundError):
         return None
     return json.loads(Path(path).read_text())
@@ -148,8 +148,11 @@ def source_manifest(args, collection):
 def source_rows(args, collection, entry, columns=SOURCE_COLUMNS):
     if args.sources_local:
         return pq.read_table(source_root(args.sources_local, collection) / entry["file"], columns=columns).to_pylist()
-    with HfFileSystem(token=False).open(f"datasets/{COLLECTIONS[collection].repo_id}/{collection}/{entry['file']}", "rb") as handle:
-        return pq.read_table(handle, columns=columns).to_pylist()
+
+    def read_rows():
+        with HfFileSystem(token=False).open(f"datasets/{COLLECTIONS[collection].repo_id}/{collection}/{entry['file']}", "rb") as handle:
+            return pq.read_table(handle, columns=columns).to_pylist()
+    return hub_read(read_rows)
 
 
 def source_manifests(args):

@@ -1,5 +1,6 @@
 """The store: Parquet round trips and row groups, the local commit, and the Hub commit fence against a fake Hub API."""
 
+import io
 import json
 import os
 from pathlib import Path
@@ -9,7 +10,7 @@ import httpx
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from huggingface_hub.errors import HfHubHTTPError
+from huggingface_hub.errors import EntryNotFoundError, HfHubHTTPError, LocalEntryNotFoundError, RemoteEntryNotFoundError
 
 from scotus_products import store as store_module
 from scotus_products.store import COLUMNS, SCHEMA, HubStore, LocalStore, Superseded, git_blob_sha1, read_parquet, schema_differences, sha256_file, write_parquet
@@ -179,13 +180,231 @@ def hub(tmp_path, monkeypatch):
 
 class UnreachableApi(FakeApi):
     def dataset_info(self, repo_id):
+        self.attempts += 1
         raise httpx.ConnectError("planted: the Hub cannot be reached")
 
 
-def test_a_hub_that_cannot_be_reached_leaves_no_scratch_directory(tmp_path):
+def test_a_hub_that_cannot_be_reached_leaves_no_scratch_directory(tmp_path, monkeypatch):
+    sleeps = []
+    monkeypatch.setattr(store_module.time, "sleep", sleeps.append)
+    api = UnreachableApi()
     with pytest.raises(httpx.ConnectError):
-        HubStore("x/y", workdir=tmp_path, api=UnreachableApi())
+        HubStore("x/y", workdir=tmp_path, api=api)
     assert list(tmp_path.iterdir()) == []
+    assert api.attempts == 4 and sleeps == [60, 120, 180], "a dropped connection at open is retried as a commit is, then raised"
+
+
+class BusyApi(FakeApi):
+    """A FakeApi whose read methods first raise the failures queued for them in fail, one per call, then answer."""
+
+    def __init__(self, **fail):
+        super().__init__()
+        self.fail = {name: list(errors) for name, errors in fail.items()}
+        self.calls = {}
+
+    def _call(self, name):
+        self.calls[name] = self.calls.get(name, 0) + 1
+        if self.fail.get(name):
+            raise self.fail[name].pop(0)
+
+    def dataset_info(self, repo_id):
+        self._call("dataset_info")
+        return super().dataset_info(repo_id)
+
+    def list_repo_files(self, repo_id, repo_type, revision):
+        self._call("list_repo_files")
+        return sorted(self.files)
+
+    def get_paths_info(self, repo_id, paths, repo_type, revision):
+        self._call("get_paths_info")
+        return super().get_paths_info(repo_id, paths, repo_type, revision)
+
+
+@pytest.fixture
+def sleeps(monkeypatch):
+    waits = []
+    monkeypatch.setattr(store_module.time, "sleep", waits.append)
+    return waits
+
+
+def test_a_busy_hub_at_open_is_retried(tmp_path, sleeps):
+    """huggingface_hub 1.32.0 does not retry dataset_info; a sibling pipeline's scheduled run of November 11, 2026 stopped on one 429 from it at store open ("maximum time in concurrency queue reached")."""
+    api = BusyApi(dataset_info=[http_error(429), http_error(429)])
+    store = HubStore("x/y", workdir=tmp_path, api=api)
+    try:
+        assert store.revision == "c0" and api.calls["dataset_info"] == 3 and sleeps == [60, 120]
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize("status", [401, 404])
+def test_a_refusal_at_open_is_raised_at_once(tmp_path, sleeps, status):
+    api = BusyApi(dataset_info=[http_error(status)])
+    with pytest.raises(HfHubHTTPError):
+        HubStore("x/y", workdir=tmp_path, api=api)
+    assert api.calls["dataset_info"] == 1 and sleeps == [] and list(tmp_path.iterdir()) == []
+
+
+def head_failed(status):
+    """What huggingface_hub 1.32.0 raises when a file download's HEAD request fails and its own retry fails too: a LocalEntryNotFoundError, which is an EntryNotFoundError, raised from the HTTP error."""
+    error = LocalEntryNotFoundError("An error happened while trying to locate the file on the Hub and we cannot find the requested files in the local cache.")
+    error.__cause__ = http_error(status)
+    return error
+
+
+@pytest.fixture
+def downloads(monkeypatch):
+    """Stands in for hf_hub_download: raises the failures queued in fail, one per call, then writes {repo path: bytes} from files into local_dir; a path not in files is an EntryNotFoundError."""
+    state = SimpleNamespace(files={}, fail=[], calls=0)
+
+    def download(repo_id, filename, repo_type, revision, local_dir, token):
+        state.calls += 1
+        if state.fail:
+            raise state.fail.pop(0)
+        if filename not in state.files:
+            raise EntryNotFoundError(f"planted: {filename} is not in the repo")
+        path = Path(local_dir) / filename
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(state.files[filename])
+        return str(path)
+
+    monkeypatch.setattr(store_module, "hf_hub_download", download)
+    return state
+
+
+def test_a_busy_file_download_is_retried_and_a_missing_file_is_none_at_once(tmp_path, sleeps, downloads):
+    store = HubStore("x/y", workdir=tmp_path, api=BusyApi())
+    try:
+        downloads.files["manifest.json"] = b'{"n": 1}'
+        downloads.fail = [http_error(429), http_error(429)]
+        assert store.read_manifest() == {"n": 1} and downloads.calls == 3 and sleeps == [60, 120]
+        downloads.calls, sleeps[:] = 0, []
+        assert store.read_text("README.md") is None and downloads.calls == 1 and sleeps == []
+        downloads.calls = 0
+        downloads.fail = [RemoteEntryNotFoundError("planted: 404", response=httpx.Response(404, request=httpx.Request("HEAD", "https://huggingface.co/datasets/x/y/resolve/c0/README.md")))]
+        assert store.read_text("README.md") is None and downloads.calls == 1 and sleeps == [], "the Hub's 404 for a file is an HTTP error that is not retried"
+    finally:
+        store.close()
+
+
+def test_a_busy_head_request_is_retried_and_never_taken_for_a_missing_file(tmp_path, sleeps, downloads):
+    """huggingface_hub 1.32.0 raises a failed HEAD request as LocalEntryNotFoundError, an EntryNotFoundError; caught as one, a busy Hub would read as a collection with no manifest."""
+    store = HubStore("x/y", workdir=tmp_path, api=BusyApi())
+    try:
+        downloads.files["manifest.json"] = b'{"n": 1}'
+        downloads.fail = [head_failed(429)]
+        assert store.read_manifest() == {"n": 1} and downloads.calls == 2 and sleeps == [60]
+        downloads.calls, sleeps[:] = 0, []
+        downloads.fail = [head_failed(503)] * 4
+        with pytest.raises(HfHubHTTPError) as raised:
+            store.read_manifest()
+        assert raised.value.response.status_code == 503 and downloads.calls == 4 and sleeps == [60, 120, 180]
+        downloads.calls, sleeps[:] = 0, []
+        downloads.fail = [head_failed(403)]
+        with pytest.raises(HfHubHTTPError):
+            store.read_manifest()
+        assert downloads.calls == 1 and sleeps == []
+    finally:
+        store.close()
+
+
+def test_busy_file_listings_and_path_infos_are_retried(tmp_path, sleeps, downloads):
+    api = BusyApi(list_repo_files=[http_error(503)], get_paths_info=[httpx.ReadTimeout("planted")])
+    api.files = {"c/data/OT2023.parquet": b"rows", "c/manifest.json": b"{}", "d/manifest.json": b"{}"}
+    downloads.files["d/manifest.json"] = b'{"collection": "d"}'
+    store = HubStore("x/y", workdir=tmp_path, api=api, prefix="c/", root_card=lambda manifests: "card\n")
+    try:
+        assert store.list_files("data/") == ["data/OT2023.parquet"] and api.calls["list_repo_files"] == 2
+        api.fail["list_repo_files"] = [http_error(429)]
+        assert store.collection_manifests() == {"d": {"collection": "d"}} and api.calls["list_repo_files"] == 4, "the sibling collections' manifests are listed through the retry too"
+        assert store.file_sha256s(["manifest.json"]) == {} and api.calls["get_paths_info"] == 2
+        assert sleeps == [60, 60, 60]
+    finally:
+        store.close()
+
+
+def test_a_busy_hub_while_checking_whether_a_commit_landed_is_retried(hub):
+    store, api = hub
+    real_create = api.create_commit
+    busy = {"dataset_info": [http_error(429)], "get_paths_info": [http_error(429)]}
+
+    def lands_then_drops(*args, **kwargs):
+        api.create_commit = real_create
+        real_create(*args, **kwargs)
+        raise http_error(502)
+
+    def busy_once(name):
+        def call(*args, **kwargs):
+            if busy[name]:
+                raise busy[name].pop()
+            return getattr(FakeApi, name)(api, *args, **kwargs)
+        return call
+
+    api.create_commit, api.dataset_info, api.get_paths_info = lands_then_drops, busy_once("dataset_info"), busy_once("get_paths_info")
+    store.stage_manifest({"n": 1})
+    assert store.commit("first") == "c1" and api.commits == ["first"] and store.superseded is None
+    assert busy == {"dataset_info": [], "get_paths_info": []}, "both reads of the landed check met a busy Hub"
+
+
+class FlakyFiles:
+    """Stands in for HfFileSystem: open serves {path: bytes}, and every read numbered in fail (counted over all handles) raises a 429 instead."""
+
+    def __init__(self, files, fail=()):
+        self.files, self.fail, self.reads, self.opens = files, set(fail), 0, 0
+
+    def __call__(self, token=None):
+        return self
+
+    def open(self, path, mode="rb"):
+        self.opens += 1
+        files = self
+
+        class Handle(io.BytesIO):
+            def read(self, *args):
+                files.reads += 1
+                if files.reads in files.fail:
+                    raise http_error(429)
+                return super().read(*args)
+
+        return Handle(self.files[path])
+
+
+def four_row_groups():
+    """A parquet file of 20 rows in 4 row groups; with only id read, pyarrow reads the footer, then each row group's id column as it is reached (pyarrow 26.0.0)."""
+    buffer = io.BytesIO()
+    pq.write_table(pa.table({"id": [f"{n:02d}" for n in range(20)], "text": [f"x{n}" * 20000 for n in range(20)]}), buffer, row_group_size=5, compression="none")
+    return buffer.getvalue()
+
+
+def test_busy_range_reads_are_retried_from_a_fresh_open(tmp_path, sleeps, monkeypatch):
+    path = "datasets/x/y@c0/data/OT2023.parquet"
+    store = HubStore("x/y", workdir=tmp_path, api=BusyApi())
+    try:
+        files = FlakyFiles({path: four_row_groups()}, fail=[1])
+        monkeypatch.setattr(store_module, "HfFileSystem", files)
+        assert store.read_schema("data/OT2023.parquet").names == ["id", "text"] and files.opens == 2
+        files.fail, files.opens = {files.reads + 2}, 0
+        assert store.read_columns("data/OT2023.parquet", ["id"])["id"] == [f"{n:02d}" for n in range(20)] and files.opens == 2
+        assert sleeps == [60, 60]
+    finally:
+        store.close()
+
+
+def test_iter_rows_retries_a_read_that_fails_midway_without_repeating_a_row(tmp_path, sleeps, monkeypatch):
+    path = "datasets/x/y@c0/data/OT2023.parquet"
+    store = HubStore("x/y", workdir=tmp_path, api=BusyApi())
+    try:
+        # Read 4 is the third row group's ids, so the failure comes after 10 rows have been yielded.
+        files = FlakyFiles({path: four_row_groups()}, fail=[4])
+        monkeypatch.setattr(store_module, "HfFileSystem", files)
+        seen = []
+        for row in store.iter_rows("data/OT2023.parquet", ["id"], batch_size=5):
+            seen.append(row["id"])
+            if len(seen) == 10:
+                assert files.reads == 3 and files.opens == 1, "the failure is still to come"
+        assert seen == [f"{n:02d}" for n in range(20)] and files.opens == 2 and sleeps == [60]
+    finally:
+        store.close()
 
 
 def test_a_commit_on_a_stale_parent_is_superseded_and_the_store_writes_nothing_more(hub):

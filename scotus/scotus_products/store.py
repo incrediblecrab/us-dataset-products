@@ -20,7 +20,7 @@ import httpx
 import pyarrow as pa
 import pyarrow.parquet as pq
 from huggingface_hub import CommitOperationAdd, HfApi, HfFileSystem, hf_hub_download
-from huggingface_hub.errors import EntryNotFoundError, HfHubHTTPError, RemoteEntryNotFoundError
+from huggingface_hub.errors import EntryNotFoundError, HfHubHTTPError, LocalEntryNotFoundError, RemoteEntryNotFoundError
 
 SCHEMA = pa.schema([
     ("id", pa.string()),
@@ -62,7 +62,7 @@ MANIFEST = "manifest.json"
 CARD = "README.md"
 # A row group closes once its rows reach this many bytes; one scanned volume can exceed it alone, and then fills a row group by itself.
 ROW_GROUP_BYTES = 64 << 20
-# A Hub call that is retried (a commit, a Trusted Publishing token trade) is tried this many times, waiting retry_delay between tries.
+# A Hub call that is retried (a commit, a Trusted Publishing token trade, and every read through hub_read) is tried this many times, waiting retry_delay between tries.
 HUB_ATTEMPTS = 4
 RETRYABLE = (408, 429, 500, 502, 503, 504)
 # Failures with no HTTP status that are still a busy Hub or network, so they are retried as well: a dropped connection or timeout, and a README check answered with a page that is not JSON. huggingface_hub 1.32.0 parses the validate-yaml body before it checks the status, so a busy Hub raises JSONDecodeError there, before anything is uploaded; the Fed scheduled run of September 27, 2026 stopped on one.
@@ -82,6 +82,25 @@ def retry_delay(error, attempt):
 def failure(error):
     """The HTTP status of a Hub failure, or the name of a TRANSIENT one."""
     return getattr(error.response, "status_code", None) if isinstance(error, HfHubHTTPError) else type(error).__name__
+
+
+def hub_read(call, *args, **kwargs):
+    """call(*args, **kwargs), retried as a commit is. huggingface_hub 1.32.0 does not retry dataset_info, get_paths_info or list_repo_files at all, and retries a file download's 429 about five times with waits under 8 seconds; a sibling pipeline's scheduled run of November 11, 2026 stopped on one 429 from dataset_info ("maximum time in concurrency queue reached"), and a scotus run reads 6 to 7 repos and 24 collections a day."""
+    for attempt in range(HUB_ATTEMPTS):
+        try:
+            return call(*args, **kwargs)
+        except (HfHubHTTPError, *TRANSIENT, LocalEntryNotFoundError) as caught:
+            # huggingface_hub 1.32.0 raises a file download's failed HEAD request (a 429, a server error, a dropped connection), once its own retry fails, as LocalEntryNotFoundError, an EntryNotFoundError, so it is judged by the failure it wraps, and raised as that failure, lest the caller take a busy Hub for a missing file.
+            error = caught.__cause__ if isinstance(caught, LocalEntryNotFoundError) else caught
+            if not isinstance(error, (HfHubHTTPError, *TRANSIENT)):
+                raise
+            delay = retry_delay(error, attempt)
+            if delay is None:
+                if error is caught:
+                    raise
+                raise error from None
+            log.warning("%s attempt %d failed with %s; retrying", getattr(call, "__name__", "Hub call"), attempt + 1, failure(error))
+            time.sleep(delay)
 
 
 class Superseded(RuntimeError):
@@ -326,14 +345,14 @@ class HubStore(_Staging):
         self.repo_id = repo_id
         self.api = api or HfApi(token=token)
         # Before the scratch directory exists, so a Hub that cannot be reached leaves nothing behind.
-        info = self.api.dataset_info(repo_id)
+        info = hub_read(self.api.dataset_info, repo_id)
         self.revision = info.sha
         super().__init__(workdir, card, prefix, root_card)
         self.superseded = None
 
     def _download(self, repo_path):
         try:
-            local = hf_hub_download(self.repo_id, repo_path, repo_type="dataset", revision=self.revision, local_dir=self.dir / "download", token=self.api.token)
+            local = hub_read(hf_hub_download, self.repo_id, repo_path, repo_type="dataset", revision=self.revision, local_dir=self.dir / "download", token=self.api.token)
         except (EntryNotFoundError, RemoteEntryNotFoundError):
             return None
         self.measure()
@@ -345,7 +364,7 @@ class HubStore(_Staging):
 
     def _stored_manifests(self):
         found = {}
-        for path in self.api.list_repo_files(self.repo_id, repo_type="dataset", revision=self.revision):
+        for path in hub_read(self.api.list_repo_files, self.repo_id, repo_type="dataset", revision=self.revision):
             if path.count("/") == 1 and path.endswith("/" + MANIFEST):
                 text = self.read_text(path, root=True)
                 if text:
@@ -362,23 +381,49 @@ class HubStore(_Staging):
         finally:
             local.unlink(missing_ok=True)
 
+    def _open(self, repo_path):
+        return HfFileSystem(token=self.api.token).open(f"datasets/{self.repo_id}@{self.revision}/{self._path(repo_path)}", "rb")
+
     def iter_rows(self, repo_path, columns=None, batch_size=8):
-        fs = HfFileSystem(token=self.api.token)
-        with fs.open(f"datasets/{self.repo_id}@{self.revision}/{self._path(repo_path)}", "rb") as handle:
-            for batch in pq.ParquetFile(handle).iter_batches(batch_size=batch_size, columns=columns):
+        """Each batch is read through hub_read; a failed read closes the file, and the retry opens it again and skips the batches already yielded, so no row is yielded twice."""
+        handle, batches, done = None, None, 0
+
+        def next_batch():
+            nonlocal handle, batches
+            try:
+                if batches is None:
+                    if handle is not None:
+                        handle.close()
+                    handle = self._open(repo_path)
+                    batches = pq.ParquetFile(handle).iter_batches(batch_size=batch_size, columns=columns)
+                    for _ in range(done):
+                        next(batches)
+                return next(batches, None)
+            except Exception:
+                batches = None
+                raise
+
+        try:
+            while (batch := hub_read(next_batch)) is not None:
+                done += 1
                 yield from batch.to_pylist()
+        finally:
+            if handle is not None:
+                handle.close()
 
     def read_table(self, repo_path, columns):
-        """Reads only the named columns, by HTTP range requests, so verification never downloads the files."""
-        fs = HfFileSystem(token=self.api.token)
-        with fs.open(f"datasets/{self.repo_id}@{self.revision}/{self._path(repo_path)}", "rb") as handle:
-            return pq.read_table(handle, columns=columns)
+        """Reads only the named columns, by HTTP range requests, so verification never downloads the files. A retry opens the file again."""
+        def read_table():
+            with self._open(repo_path) as handle:
+                return pq.read_table(handle, columns=columns)
+        return hub_read(read_table)
 
     def read_schema(self, repo_path):
-        """The file's Arrow schema, from its footer alone."""
-        fs = HfFileSystem(token=self.api.token)
-        with fs.open(f"datasets/{self.repo_id}@{self.revision}/{self._path(repo_path)}", "rb") as handle:
-            return pq.ParquetFile(handle).schema_arrow
+        """The file's Arrow schema, from its footer alone. A retry opens the file again."""
+        def read_schema():
+            with self._open(repo_path) as handle:
+                return pq.ParquetFile(handle).schema_arrow
+        return hub_read(read_schema)
 
     def read_columns(self, repo_path, columns):
         return self.read_table(repo_path, columns).to_pydict()
@@ -387,7 +432,7 @@ class HubStore(_Staging):
         out = {}
         paths = [self._path(path) for path in repo_paths]
         for start in range(0, len(paths), 100):
-            for info in self.api.get_paths_info(self.repo_id, paths[start:start + 100], repo_type="dataset", revision=self.revision):
+            for info in hub_read(self.api.get_paths_info, self.repo_id, paths[start:start + 100], repo_type="dataset", revision=self.revision):
                 lfs = getattr(info, "lfs", None)
                 if lfs is not None:
                     out[info.path.removeprefix(self.prefix)] = lfs.sha256
@@ -395,7 +440,7 @@ class HubStore(_Staging):
 
     def list_files(self, prefix=""):
         full = self._path(prefix)
-        return sorted(path.removeprefix(self.prefix) for path in self.api.list_repo_files(self.repo_id, repo_type="dataset", revision=self.revision) if path.startswith(full))
+        return sorted(path.removeprefix(self.prefix) for path in hub_read(self.api.list_repo_files, self.repo_id, repo_type="dataset", revision=self.revision) if path.startswith(full))
 
     def read_text(self, repo_path, root=False):
         """root=True reads a path of the repo itself (the category card) rather than of the collection."""
@@ -440,9 +485,9 @@ class HubStore(_Staging):
         staged = self.staged.get(self._path(MANIFEST))
         if staged is None:
             return None
-        head = self.api.dataset_info(self.repo_id).sha
+        head = hub_read(self.api.dataset_info, self.repo_id).sha
         data = staged.read_bytes()
-        for info in self.api.get_paths_info(self.repo_id, [self._path(MANIFEST)], repo_type="dataset", revision=head):
+        for info in hub_read(self.api.get_paths_info, self.repo_id, [self._path(MANIFEST)], repo_type="dataset", revision=head):
             lfs = getattr(info, "lfs", None)
             same = lfs.sha256 == hashlib.sha256(data).hexdigest() if lfs else getattr(info, "blob_id", None) == git_blob_sha1(data)
             if same:

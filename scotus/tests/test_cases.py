@@ -1,6 +1,7 @@
 """The case-centric builder: the docket page parser on saved real pages, docket keys and addresses, the fetch and recheck rules, and whole runs into a local store with the source datasets and the Court's site faked."""
 
 import hashlib
+import io
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -10,6 +11,7 @@ import httpx
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from huggingface_hub.errors import EntryNotFoundError, HfHubHTTPError, LocalEntryNotFoundError
 
 from conftest import page_bytes
 from scotus_products import cases
@@ -663,3 +665,52 @@ def test_a_run_that_assembles_a_term_writes_the_current_dataset_name(world, caps
     monkeypatch.setattr(cases, "BUILDER", cases.BUILDER + 1)
     status, report = world.run(capsys)
     assert status == 0 and report["terms"] and world.manifest()["dataset"] == cases.REPO_ID == "incrediblecrab/us-scotus-cases"
+
+
+def busy(status=429):
+    return HfHubHTTPError(f"{status} from the fake Hub", response=httpx.Response(status, request=httpx.Request("GET", "https://huggingface.co/datasets/x/y")))
+
+
+def test_a_busy_hub_is_retried_when_reading_a_source_manifest_or_partition(tmp_path, monkeypatch):
+    """The builder reads the source datasets anonymously, a manifest per collection and its partitions, and huggingface_hub 1.32.0 retries neither read for long; a failed HEAD request reaches it as LocalEntryNotFoundError, which is an EntryNotFoundError."""
+    sleeps, downloads = [], []
+    monkeypatch.setattr(cases.time, "sleep", sleeps.append)
+    args = SimpleNamespace(sources_local=None)
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text('{"partitions": {}}')
+    head = LocalEntryNotFoundError("An error happened while trying to locate the file on the Hub")
+    head.__cause__ = busy(503)
+    answers = [busy(), head, str(manifest), EntryNotFoundError("planted: no manifest")]
+
+    def download(repo_id, filename, repo_type, token):
+        downloads.append((repo_id, filename, token))
+        answer = answers.pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    monkeypatch.setattr(cases, "hf_hub_download", download)
+    assert cases.source_manifest(args, "opinions-of-the-court") == {"partitions": {}}
+    assert len(downloads) == 3 and downloads[0][1:] == ("opinions-of-the-court/manifest.json", False) and sleeps == [60, 120]
+    sleeps.clear()
+    assert cases.source_manifest(args, "opinions-of-the-court") is None and len(downloads) == 4 and sleeps == [], "a missing manifest is None at once"
+
+    buffer = io.BytesIO()
+    pq.write_table(pa.table({"id": ["a.pdf"], "term": pa.array([2023], pa.int32())}), buffer)
+    opens = []
+
+    class Files:
+        def __init__(self, token):
+            assert token is False
+
+        def open(self, path, mode):
+            opens.append(path)
+            return (Dropped if len(opens) == 1 else io.BytesIO)(buffer.getvalue())
+
+    class Dropped(io.BytesIO):
+        def read(self, *args):
+            raise busy(502)
+
+    monkeypatch.setattr(cases, "HfFileSystem", Files)
+    assert cases.source_rows(args, "opinions-of-the-court", {"file": "data/OT2023.parquet"}, columns=["id", "term"]) == [{"id": "a.pdf", "term": 2023}]
+    assert len(opens) == 2 and opens[0].endswith("/opinions-of-the-court/data/OT2023.parquet") and sleeps == [60]
