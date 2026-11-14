@@ -303,3 +303,41 @@ def test_rows_round_trip_sorted_by_id_in_the_dataset_schema(tmp_path):
 def test_the_same_rows_write_the_same_bytes(tmp_path):
     rows = [make_row(Edition("2026-09-02", "https://www.federalreserve.gov/monetarypolicy/beigebook202608-summary.htm"), "summary", "Text.", "federalreserve.gov", "https://www.federalreserve.gov/monetarypolicy/beigebook202608-summary.htm", "Wed, 02 Sep 2026 18:00:00 GMT")]
     assert write_parquet(rows, tmp_path / "a.parquet")["sha256"] == write_parquet(list(reversed(rows)), tmp_path / "b.parquet")["sha256"]
+
+
+def busy_lookup(status):
+    """What hf_hub_download 1.32.0 raises when its HEAD request fails and its own retry gives up: LocalEntryNotFoundError, chained from the failure."""
+    from huggingface_hub.errors import LocalEntryNotFoundError
+
+    try:
+        raise http_error(status)
+    except HfHubHTTPError as cause:
+        try:
+            raise LocalEntryNotFoundError("An error happened while trying to locate the file on the Hub") from cause
+        except LocalEntryNotFoundError as error:
+            return error
+
+
+def test_a_busy_file_lookup_is_retried_and_never_read_as_a_missing_file(hub, monkeypatch):
+    store, api = hub
+    waits, calls = [], []
+    monkeypatch.setattr(store_module.time, "sleep", waits.append)
+    plan = {"manifest.json": [busy_lookup(429)], "README.md": [busy_lookup(503)] * 4, "other.json": [busy_lookup(403)]}
+
+    def download(repo_id, repo_path, **kwargs):
+        calls.append(repo_path)
+        if plan[repo_path]:
+            raise plan[repo_path].pop(0)
+        target = Path(kwargs["local_dir"]) / repo_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text('{"n": 1}')
+        return str(target)
+
+    monkeypatch.setattr(store_module, "hf_hub_download", download)
+    assert store.read_manifest() == {"n": 1} and waits == [60]
+    with pytest.raises(HfHubHTTPError) as raised:
+        store.read_text("README.md")
+    assert raised.value.response.status_code == 503 and calls.count("README.md") == 4 and waits == [60, 60, 120, 180]
+    with pytest.raises(HfHubHTTPError):
+        store.read_text("other.json")
+    assert calls.count("other.json") == 1, "a refusal behind the lookup is raised at once"
