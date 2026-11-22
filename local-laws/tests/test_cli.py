@@ -28,7 +28,7 @@ def offline(monkeypatch, pins):
     """The CLI with the Census, New York index and notice fixtures for downloads, the synthetic LOCUS, and a clean committed tree."""
     monkeypatch.setattr(cli, "Fetcher", FakeFetcher)
     monkeypatch.setattr(locus, "download", fake_locus_download)
-    monkeypatch.setattr(locus, "stated_rows", lambda: 71)
+    monkeypatch.setattr(locus, "stated_rows", lambda: 46)
     monkeypatch.setattr(cli, "code_version", lambda: dict(CODE))
 
 
@@ -57,10 +57,22 @@ class DownNYApi(FakeNYApi):
         raise Unavailable("HTTP 503 from locallaws.static-assets.ny.gov")
 
 
+def test_the_old_locus_manifest_needs_a_rebuild_not_a_card_update(published, offline, capsys):
+    store, manifest = published
+    sources = manifest["sources"]
+    sources["locus"]["revision"] = locus.PREVIOUS["revision"]
+    del manifest["stats"]["locus"]["geoid_name_check"]
+    report = cli.probe_decision(manifest, "", {"ny": sources["ny_local_laws"] | {"stable": True}})
+    assert report["needed"] and report["reasons"] == ["LOCUS revision changed"]
+    (store.root / MANIFEST).write_text(json.dumps(manifest))
+    assert run("card", "--local", str(store.root)) == cli.STOPPED
+    assert "rebuild the crosswalk" in capsys.readouterr().err
+
+
 def test_run_writes_a_build_that_verifies_and_an_unchanged_rerun_writes_nothing(tmp_path, offline, capsys, snapshot, flood):
     out, work = tmp_path / "out", tmp_path / "work"
     assert run("run", "--local", str(out), "--workdir", str(work), "--ny-snapshot", snapshot, "--nfip-snapshot", flood) == 0
-    assert json.loads(capsys.readouterr().out) == {"governments": 50, "locus_jurisdictions": 25, "matched": 23, "ny_filings": 25, "ny_matched": 10, "ny_index_rows": 14, "ny_index_matched": 7, "tribes": 19, "nfip_communities": 25, "requests": 5, "commit": "1", "unchanged": False}
+    assert json.loads(capsys.readouterr().out) == {"governments": 50, "locus_jurisdictions": 16, "matched": 14, "ny_filings": 25, "ny_matched": 10, "ny_index_rows": 14, "ny_index_matched": 7, "tribes": 19, "nfip_communities": 25, "requests": 5, "commit": "1", "unchanged": False}
     assert LocalStore(out).list_files() == FILES
     assert not any(path.name.startswith("locus-") for path in work.iterdir()), "LOCUS's download is deleted after the build"
     manifest = (out / MANIFEST).read_text()
@@ -69,7 +81,7 @@ def test_run_writes_a_build_that_verifies_and_an_unchanged_rerun_writes_nothing(
     assert (out / MANIFEST).read_text() == manifest, "an unchanged rebuild is not committed, so even built_at stays"
     assert run("verify", "--local", str(out)) == 0
     report = json.loads(capsys.readouterr().out)
-    assert (report["problems"], report["org02_counts_compared"], report["locus_stated_rows"], report["nfip_report"], report["nfip_snapshot"]) == ([], 312, 71, {"same_file": True, "rows": 25}, {"same_file": True, "rows": 25})
+    assert (report["problems"], report["org02_counts_compared"], report["locus_stated_rows"], report["nfip_report"], report["nfip_snapshot"]) == ([], 312, 46, {"same_file": True, "rows": 25}, {"same_file": True, "rows": 25})
 
 
 def test_a_run_without_a_snapshot_reads_the_api_and_harvest_ny_saves_the_same_reading(tmp_path, offline, monkeypatch, capsys):
@@ -129,7 +141,7 @@ def test_verify_exits_1_on_a_problem_and_card_repairs_the_card(tmp_path, offline
 
 @pytest.mark.parametrize("plant, stop", [
     (lambda monkeypatch: monkeypatch.setattr(census, "GOVT_UNITS_SHA256", "0" * 64), "SourceChanged: https://www2.census.gov/programs-surveys/gus/datasets/2022/govt_units_2022.ZIP has SHA-256"),
-    (lambda monkeypatch: monkeypatch.setattr(locus, "stated_rows", lambda: 72) or monkeypatch.setattr(locus, "download", lambda directory: (fake_locus_download(directory)[0], 72)), "SourceChanged: read 71 LOCUS rows; its card states 72"),
+    (lambda monkeypatch: monkeypatch.setattr(locus, "stated_rows", lambda: 47) or monkeypatch.setattr(locus, "download", lambda directory: (fake_locus_download(directory)[0], 47)), "SourceChanged: read 46 LOCUS rows; its card states 47"),
     (lambda monkeypatch: monkeypatch.setattr(cli, "Fetcher", lambda: FakeFetcher({census.GOVT_UNITS_URL: Blocked("bot challenge at www2.census.gov/")})), "Blocked: bot challenge"),
     (lambda monkeypatch: monkeypatch.setattr(cli, "Fetcher", lambda: FakeFetcher({census.ORG02_URL: Unavailable("HTTP 503 from www2.census.gov")})), "Unavailable: HTTP 503"),
     (lambda monkeypatch: monkeypatch.setattr(cli, "Fetcher", lambda: FakeFetcher(ny=DownNYApi())), "Unavailable: HTTP 503 from locallaws.static-assets.ny.gov"),

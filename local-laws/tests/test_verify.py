@@ -18,7 +18,7 @@ from local_laws.store import CARD, MANIFEST, sha256_file, write_parquet
 from local_laws.verify import verify
 
 GOVERNMENTS, CROSSWALK, NY = TABLES["governments"]["file"], TABLES["locus_crosswalk"]["file"], TABLES["ny_local_laws"]["file"]
-ROWS = {"governments": 50, "locus_crosswalk": 25, "ny_local_laws": NY_SAMPLE["total"], "ny_local_law_index": 14, "federally_recognized_tribes": 19, "nfip_communities": 25}
+ROWS = {"governments": 50, "locus_crosswalk": 16, "ny_local_laws": NY_SAMPLE["total"], "ny_local_law_index": 14, "federally_recognized_tribes": 19, "nfip_communities": 25}
 
 
 def check(store, stated=None, fetcher=True):
@@ -69,6 +69,17 @@ def test_a_clean_build_has_no_problems(published):
     assert report == {"rows": ROWS, "org02_counts_compared": 312, "locus_stated_rows": manifest["sources"]["locus"]["rows"], "ny_index_state_records": 14, "tribes_notice_entries": 19, "nfip_snapshot": {"same_file": True, "rows": 25}, "nfip_report": {"same_file": True, "rows": 25}, "problems": []}
 
 
+def test_the_name_check_on_geoid_matches_is_counted_from_the_table(published):
+    store, manifest = published
+    tables = {name: store.read_table(spec["file"]).to_pylist() for name, spec in TABLES.items()}
+    named = [r["name_match"] for r in tables["locus_crosswalk"] if r["match"] == "geoid"]
+    check = manifest["stats"]["locus"]["geoid_name_check"]
+    assert sum(check.values()) == len(named) and check["pooled"] == sum(1 for m in named if m in locus.POOLED) and check["pooled"] >= 1
+    row(tables["locus_crosswalk"], locus_name="Barre").update(name_match="unmatched")
+    changed = summarize(*(tables[name] for name in TABLES))["locus"]["geoid_name_check"]
+    assert (changed["pooled"], changed["none"]) == (check["pooled"] - 1, check["none"] + 1)
+
+
 @pytest.mark.parametrize("edit, expected", [
     (lambda rows: rows.append(dict(rows[0])), "governments: duplicate census_id: 1 (100001)"),
     (lambda rows: rows[0].update(census_id="10001"), "governments: census_id null or not 6 digits: 1 ('10001')"),
@@ -93,15 +104,21 @@ def test_a_government_dropped_consistently_is_caught_only_by_cg2200org02(publish
 
 
 @pytest.mark.parametrize("edit, expected", [
-    (lambda rows: row(rows, locus_name="prattville").update(census_id="999999"), "locus_crosswalk: al/prattville names census_id 999999, which is not in governments"),
-    (lambda rows: rows.append(dict(rows[0])), "locus_crosswalk: jurisdictions listed more than once: 1 (ak/cities/anchorage)"),
-    (lambda rows: row(rows, locus_name="prattville").update(census_id=None), "locus_crosswalk: al/prattville is name with census_id None"),
-    (lambda rows: row(rows, locus_name="howard").update(census_id="127039"), "locus_crosswalk: ks/howard is ambiguous with census_id '127039'"),
-    (lambda rows: row(rows, locus_name="prattville").update(candidates=["100019"]), "locus_crosswalk: al/prattville is name with candidates ['100019']"),
-    (lambda rows: row(rows, locus_name="barre").update(census_id="114404", candidates=["135964"]), "locus_crosswalk: vt/barre's census_id 114404 is not among its candidates"),
-    (lambda rows: row(rows, locus_name="barre").update(match="guess"), "locus_crosswalk: match values ['guess'] are not among"),
-    (lambda rows: row(rows, locus_name="barre").update(census_id="100019"), "locus_crosswalk: census_id matched by more than one jurisdiction: 1 (100019)"),
-    (lambda rows: row(rows, locus_name="barre").update(locus_rows=0), "locus_crosswalk: vt/barre has locus_rows 0"),
+    (lambda rows: row(rows, locus_name="Prattville").update(census_id="999999"), "locus_crosswalk: AL/Prattville names census_id 999999, which is not in governments"),
+    (lambda rows: rows.append(dict(rows[0])), "locus_crosswalk: jurisdictions listed more than once: 1 (AK/city/Anchorage)"),
+    (lambda rows: row(rows, locus_name="Prattville").update(locus_document_id="doc_0001"), "locus_crosswalk: missing or duplicate locus_document_id: 1 (doc_0001)"),
+    (lambda rows: row(rows, locus_name="Prattville").update(census_id=None), "locus_crosswalk: AL/Prattville is geoid with census_id None"),
+    (lambda rows: row(rows, locus_name="Howard").update(census_id="127039"), "locus_crosswalk: KS/Howard is ambiguous with census_id '127039'"),
+    (lambda rows: row(rows, locus_name="Prattville").update(candidates=["100019"]), "locus_crosswalk: AL/Prattville is geoid with candidates ['100019']"),
+    (lambda rows: row(rows, locus_name="Barre").update(census_id="114404", candidates=["135964"]), "locus_crosswalk: VT/Barre's census_id 114404 is not among its candidates"),
+    (lambda rows: row(rows, locus_name="Barre").update(match="guess"), "locus_crosswalk: match values ['guess'] are not among"),
+    (lambda rows: row(rows, locus_name="Barre").update(census_id="100019"), "locus_crosswalk: census_id matched by more than one jurisdiction: 1 (100019)"),
+    (lambda rows: row(rows, locus_name="Barre").update(locus_rows=0), "locus_crosswalk: VT/Barre has locus_rows 0"),
+    (lambda rows: row(rows, locus_name="Barre").update(locus_geoid=None), "locus_crosswalk: VT/Barre is geoid without locus_geoid"),
+    (lambda rows: row(rows, locus_name="Barre").update(name_match=None), "locus_crosswalk: VT/Barre is geoid with name_match None"),
+    (lambda rows: row(rows, locus_name="Barre").update(name_match="geoid"), "locus_crosswalk: VT/Barre is geoid with name_match 'geoid'"),
+    (lambda rows: row(rows, locus_name="Barre").update(name_match="guess"), "locus_crosswalk: VT/Barre is geoid with name_match 'guess'"),
+    (lambda rows: row(rows, locus_name="Anchorage").update(name_match="name"), "locus_crosswalk: AK/Anchorage is name with name_match 'name'"),
 ])
 def test_each_planted_crosswalk_defect_is_named_even_in_a_consistent_manifest(published, edit, expected):
     store, _ = published
@@ -158,7 +175,7 @@ def test_ny_counts_that_are_not_the_api_s_are_named(published):
 def test_a_file_that_is_not_the_manifest_s_is_named(published):
     store, manifest = published
     rows = manifest["sources"]["locus"]["rows"]
-    edit_table(store, "locus_crosswalk", lambda crosswalk: row(crosswalk, locus_name="barre").update(locus_rows=4))
+    edit_table(store, "locus_crosswalk", lambda crosswalk: row(crosswalk, locus_name="Barre").update(locus_rows=4))
     problems = check(store, stated=rows)
     assert problems[0].startswith(f"{CROSSWALK} has SHA-256 ")
     assert f"locus_crosswalk: {rows + 1} LOCUS rows, the manifest says {rows}" in problems and f"locus_crosswalk: {rows + 1} LOCUS rows, LOCUS's card states {rows}" in problems
@@ -234,7 +251,7 @@ def test_a_manifest_built_from_other_pins_is_named(published, monkeypatch):
     monkeypatch.setattr(locus, "REVISION", "f" * 40)
     monkeypatch.setattr(census, "GOVT_UNITS_SHA256", "e" * 64)
     problems = check(store)
-    assert f"the manifest's locus revision is '4cee954ca8ad8e31cb0502dff6682c87b74b4302'; this code pins {'f' * 40}" in problems
+    assert f"the manifest's locus revision is '99354c417ed5cda88bf3f4bf36a3336fd24f101f'; this code pins {'f' * 40}" in problems
     assert any(problem.startswith("the manifest's census_governments sha256 is ") and problem.endswith("e" * 64) for problem in problems)
 
 

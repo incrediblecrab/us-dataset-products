@@ -245,7 +245,9 @@ def probe_decision(manifest, card, head):
             status["nfip"] = "changed"
         else:
             status["nfip"] = "unchanged"
-        if card != render(manifest):
+        if sources["locus"]["revision"] != locus.REVISION:
+            reasons.append("LOCUS revision changed")
+        elif card != render(manifest):
             reasons.append("dataset card render changed")
     degraded = head.get("nfip") is None
     return {"needed": bool(reasons), "reasons": reasons or ["checked sources match; FEMA freshness is unverified" if degraded else "published sources match"],
@@ -363,7 +365,11 @@ def cmd_card(args):
     if text is None:
         print(f"no {MANIFEST}: run `python -m local_laws run` first", file=sys.stderr)
         return STOPPED
-    card = render(json.loads(text))
+    manifest = json.loads(text)
+    if manifest["sources"]["locus"]["revision"] != locus.REVISION:
+        print("the published manifest uses another LOCUS revision: rebuild the crosswalk before updating the card", file=sys.stderr)
+        return STOPPED
+    card = render(manifest)
     if store.read_text(CARD) == card:
         print("card unchanged")
         return 0
@@ -436,7 +442,7 @@ def main(argv=None):
     add("check-pins", cmd_check_pins, "fail if a manually pinned source has a newer release to review")
     add("check-freshness", cmd_check_freshness, "check published FEMA files against the live source; fail if changed or unreadable beyond the stored-reading age limit")
     run = add("run", cmd_run, "download the sources, check them, build the tables and commit them with the manifest and card")
-    run.add_argument("--workdir", help="keep scratch files here (default: a temporary directory, deleted afterwards); LOCUS's download needs about 2 GB")
+    run.add_argument("--workdir", help="keep scratch files here (default: a temporary directory, deleted afterwards); LOCUS's download needs about 1.3 GB")
     run.add_argument("--ny-snapshot", help="build New York's table from a snapshot harvest-ny wrote, instead of reading the API again (about 1,500 requests)")
     run.add_argument("--nfip-snapshot", help="build the flood insurance communities' table from a snapshot harvest-nfip wrote, instead of reading fema.gov again")
     add("verify", cmd_verify, "check the published files against the manifest, each other, CG2200ORG02, LOCUS's card, the NY API's counts at the reading, the NY index's release, the BIA's notices and FEMA's report").add_argument(

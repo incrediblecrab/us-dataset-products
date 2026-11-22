@@ -17,7 +17,7 @@ from local_laws import census  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 PRIVATE = {"TITLE", "ADDRESS1", "ADDRESS2", "CITY", "ZIP", "ZIP4"}
-# Same-name governments the matching must tell apart, the governments the aliases name, and rows each normalization is for.
+# General-purpose governments for the crosswalk, including same-name pairs, and rows each normalization is for.
 CHOSEN = {
     "General Purpose": [
         "100001", "100019", "114404", "135964", "109507", "170831", "125103", "162180", "109173", "170293", "170302", "186570", "127039", "127088",

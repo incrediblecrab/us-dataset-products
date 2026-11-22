@@ -12,7 +12,6 @@ LOCUS_PAPER = "https://arxiv.org/abs/2606.19334"
 LOCUS_CITATION = f'Denis Peskoff, Joe Barrow, Christopher Vu and Diag Davenport, "Freeing the Law with LOCUS: A Local Ordinance Corpus for the United States", [arXiv:2606.19334]({LOCUS_PAPER}) (2026)'
 TYPE_NAMES = {"county": "County", "municipal": "Municipal", "township": "Township", "special_district": "Special district", "school_district": "Independent school district"}
 TECH_DOC = "https://www2.census.gov/programs-surveys/gus/datasets/2022/2022_gov_org_meth_tech_doc.pdf"
-HOWARD_ESTIMATES = "https://www2.census.gov/programs-surveys/popest/datasets/2020-2024/cities/totals/sub-est2024.csv"
 ICC_RELEASE = "https://www.iccsafe.org/about/periodicals-and-newsroom/industry-leaders-american-legal-publishing-and-general-code-unite-to-provide-communities-with-best-in-class-codification-services/"
 NY_FILING = "https://dos.ny.gov/local-law-filing"
 NY_MANUAL = "https://dos.ny.gov/system/files/documents/2018/09/local-laws-website-manual.pdf"
@@ -120,9 +119,11 @@ def use():
         "```",
         "",
         "```sql",
-        "-- The ordinance text is in LOCUS (CC BY-NC 4.0). Find a government's LOCUS name here, then read its sections there, at the revision the crosswalk was built from.",
+        "-- The ordinance text is in LOCUS (CC BY-NC 4.0). Find TOWN OF BARRE here, then read its sections at the pinned revision.",
         f"SELECT locus_state, locus_jurisdiction_type, locus_name FROM '{base}/locus_crosswalk.parquet' WHERE census_id = '135964';",
-        f"SELECT header, topic FROM 'hf://datasets/{locus.REPO_ID}@{locus.REVISION}/data/*.parquet' WHERE state = 'vt' AND source_jurisdiction_type = 'cities' AND city = 'barre' LIMIT 20;",
+        f"SELECT s.header, s.topic_majority FROM 'hf://datasets/{locus.REPO_ID}@{locus.REVISION}/sections/*.parquet' AS s",
+        f"JOIN '{base}/locus_crosswalk.parquet' AS c ON s.document_id = c.locus_document_id",
+        "WHERE c.census_id = '135964' LIMIT 20;",
         "```",
         "",
         "```sql",
@@ -191,11 +192,15 @@ def matching(manifest):
     matched = lx["matched"]
     fits = sum(entry["text_fits"] for entry in matches.values())
     differs = lx["text_differs"]
+    geoid, check = matches["geoid"]["jurisdictions"], lx["geoid_name_check"]
+    previous = locus.PREVIOUS
     unchecked = sum(entry["text_unchecked"] for name, entry in matches.items() if name in locus.MATCHED)
     lines = [
         "## Matching",
         "",
-        f"LOCUS identifies a jurisdiction by state and a lowercase name, such as `batavia_city` or `saint_tammany_parish`, with no Census or FIPS code. The build matches each name to the Census file's county, municipal and township governments with the rules below, tried in this order. It then reads all {lx['rows']:,} rows of LOCUS's text and counts how the text writes each candidate's name with a type word, such as \"Town of Barre\" or \"Barre City\". Where several governments share a name, that count chooses among them (`text_type`, `text_county`); for every match it is a check (`text_fits`).",
+        f"LOCUS v1.1 identifies jurisdictions by Census GEOID where available. The build matches {geoid:,} jurisdictions by GEOID to the FIPS codes of the Census file's county, municipal and township governments. For the remaining {lx['jurisdictions'] - geoid:,}, the GEOID is missing or fits no government, so the build uses the name rules below. As a check, the name rules are also run on every GEOID match: for {check['single']:,} they give a single government, always the GEOID's; for {check['pooled']:,} they leave several same-name governments, always including the GEOID's, and the GEOID decides; for {check['none']:,} no name fits. The build stops if the name rules give another single government, or a set of candidates without the GEOID's.",
+        "",
+        f"The build reads all {lx['rows']:,} sections and counts how the text writes each candidate's name with a type word, such as \"Town of Barre\". Where the name fallback leaves several candidates, that count can choose among them (`text_type`, `text_county`); for every match it is a check (`text_fits`).",
         "",
         "| `match` | Rule | Jurisdictions | LOCUS rows | Text fits | Text differs | Not checked |",
         "|---|---|---:|---:|---:|---:|---:|",
@@ -204,12 +209,8 @@ def matching(manifest):
         entry = matches[name]
         lines.append(f"| `{name}` | {doc} | {entry['jurisdictions']:,} | {entry['rows']:,} | {entry['text_fits']:,} | {entry['text_differs']:,} | {entry['text_unchecked']:,} |")
     lines += ["", f"The text fits the matched government's Census title for {fits:,} of the {matched:,} matches ({share(fits, matched)})."]
-    reviewed = locus.REVIEWED_DIFFERS if manifest["sources"]["locus"]["revision"] == locus.REVISION else frozenset()
-    unread = sorted(set(differs) - reviewed)
-    if differs and not unread:
-        lines[-1] += f" It differs for {len(differs):,}. Each of those was read by hand against LOCUS's text on September 25, 2026, and each is the government LOCUS means, named with another word" + (f": {locus.REVIEW_FINDING}." if set(differs) == reviewed else ".")
-    elif differs:
-        lines[-1] += f" It differs for {len(differs):,}, and {len(unread):,} of those {'has' if len(unread) == 1 else 'have'} not been read by hand: {', '.join(f'`{name}`' for name in unread)}."
+    if differs:
+        lines[-1] += f" It differs for {len(differs):,}, not read by hand at this revision: {', '.join(f'`{name}`' for name in differs)}."
     silent = lx["matched_without_mentions"]
     few = lx["matched_few_mentions"]
     untitled = unchecked - few
@@ -218,13 +219,10 @@ def matching(manifest):
         "",
         f"The text does not check {unchecked:,} matches, {reasons}. It never names {len(silent):,} of them that way: {', '.join(f'`{name}`' for name in silent) or 'none'}. That happens when the text does not use the Census name, as with consolidated governments such as METROPOLITAN GOVERNMENT OF NASHVILLE-DAVIDSON COUNTY, or when the text may not be about the place LOCUS files it under.",
         "",
-        f"The {len(locus.ALIASES)} aliases, each checked by hand against the Census file and LOCUS's text. The build stops if the Census name at an alias's `census_id` changes or LOCUS drops the jurisdiction.",
+        f"Until {day(previous['until'])} the crosswalk used LOCUS v1.0 (revision `{previous['revision'][:12]}`), whose {previous['jurisdictions']:,} jurisdictions matched {previous['matched']:,} governments. LOCUS v1.1 keeps one representative document per county. Of the previously matched governments, {previous['still_matched']:,} are still matched and {previous['no_longer_matched']:,} are not; {previous['newly_matched']:,} governments are newly matched. The v1.0 crosswalk is in this dataset's history at [commit `{previous['dataset_commit'][:8]}`](https://huggingface.co/datasets/{REPO_ID}/tree/{previous['dataset_commit']}).",
         "",
-        "| LOCUS jurisdiction | Census government |",
-        "|---|---|",
     ]
-    lines += [f"| `{state}/{name}` | {census_name} (`{census_id}`) |" for (state, _, name), (census_id, census_name) in locus.ALIASES.items()]
-    return lines + [""]
+    return lines
 
 
 def new_york(manifest):
@@ -587,16 +585,14 @@ def gaps(manifest):
         "- Tribal governments are not rows. Besides the federal government and the 50 state governments, the Census Bureau \"recognizes five basic types of local governments\" ([technical documentation](" + TECH_DOC + ")), the five in `government_type`, and tribal governments are not among them. `federally_recognized_tribes` lists the Tribes the United States recognizes by name only: it does not match them to governments or places, holds none of their laws, and leaves out Tribes that a state recognizes and the United States does not. Nor are the territories' governments rows: the Census file covers the 50 states and the District of Columbia.",
         f"- Dependent public school systems, {notes.get('dependent_school_systems_skipped', 0):,} in the Census file, are left out, as the Census leaves them out of its count: they \"are classified as agencies of other state, county, municipal, or town or township governments and are not counted as separate governments\" ([technical documentation]({TECH_DOC})).",
     ]
-    if "ks/howard" in lx["ambiguous"]:
-        lines.append(f"- The Census file can omit an active government. Howard, Kansas, in Elk County, is an active incorporated city in the Census's own [Vintage 2024 population estimates]({HOWARD_ESTIMATES}) (561 people in 2024), and LOCUS has its code as `ks/howard`, but it is not in the 2022 file; so `ks/howard` is `ambiguous` between the two townships named Howard, neither of whose titles its text fits.")
-    others = [name for name in lx["ambiguous"] if name != "ks/howard"] + lx["unmatched"]
-    if others:
-        lines.append(f"- {len(others):,} other LOCUS {'jurisdiction is' if len(others) == 1 else 'jurisdictions are'} `ambiguous` or `unmatched`: {', '.join(f'`{name}`' for name in others)}.")
+    unresolved = lx["ambiguous"] + lx["unmatched"]
+    if unresolved:
+        lines.append(f"- {len(unresolved):,} LOCUS {'jurisdiction is' if len(unresolved) == 1 else 'jurisdictions are'} `ambiguous` or `unmatched`: {', '.join(f'`{name}`' for name in unresolved)}.")
     lines += [
         "- The Census of Governments is for 2022: a government formed, merged or dissolved since then is not reflected.",
         f"- {dormant:,} governments the Census marks dormant are rows, because the Census still counts them.",
         f"- Web addresses are as reported to the Census, which says it did minimal quality control on them; they are not checked here. {web:,} of the {stats['governments']:,} governments reported one. The Census file's mailing addresses and contact titles are left out: the map does not need them, and a few of the addresses name a person.",
-        "- LOCUS's text is not here, and LOCUS names are matched to governments by name, with the precision described under Matching. Which governments' codes the codifiers hold is not known here; see Where local law is published.",
+        "- LOCUS's text is not here. Jurisdictions are matched to governments by GEOID, and by name where the GEOID is missing or fits no government, as described under Matching. Which governments' codes the codifiers hold is not known here; see Where local law is published.",
         f"- `ny_local_laws` covers New York alone, and only its local laws. The Department's guide, [Adopting Local Laws in New York State]({NY_GUIDE}), notes that under the Municipal Home Rule Law a local law \"shall not include an ordinance, resolution or other similar act of the legislative body\", so those acts are not here. Nor are laws filed before the Department's database begins: its manual says \"Local Laws filed prior to January 1, 1998 are not in the Local Laws Database. They are maintained in manual files.\" For those, `ny_local_law_index` has the State's older index, {stats['ny_index']['filed_before_search']:,} rows filed before 1998, without the laws' text.",
         f"- `ny_local_laws` is the search as it answered on {day(ny_source['finished_at'])}. A filing the Department had not yet added, or has removed or corrected since, is not reflected, and since filings took days to weeks to be added (see New York local laws), the weeks before then are incomplete.",
         f"- {NY_OUTSIDE}",
@@ -686,7 +682,7 @@ def license_section(manifest):
         "MIT, for the compilation and the code that builds it.",
         "",
         f"- The Census files are works of the United States Government and are not subject to copyright in the United States ([17 U.S.C. § 105]({USC_105})).",
-        f"- The crosswalk records facts about LOCUS-v1, namely its jurisdiction names, their row counts and counts of type words in their text, and holds none of its text. LOCUS licenses its text [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/), which anyone using that text must follow. Cite LOCUS as {LOCUS_CITATION}.",
+        f"- The crosswalk records facts about LOCUS: document IDs, jurisdiction names and GEOIDs, section counts and counts of type words. It holds none of the text. LOCUS licenses its text [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/), which anyone using that text must follow. Cite LOCUS as {LOCUS_CITATION}.",
         f"- `ny_local_laws` records facts about each filing, namely who filed it, its number, its dates, its PDF's name, size and public link, and the law's title as the Department records it, and holds none of the laws' text. Titles are among the \"words and short phrases such as names, titles, and slogans\" that the Copyright Office's rules list as not subject to copyright ([37 C.F.R. § 202.1(a)]({CFR_TITLES})). On September 26, 2026 the Department's Local Laws pages linked no terms of use, its [disclaimer]({NY_DISCLAIMER}) covered only its links to other sites, and the API's host had no robots.txt (it answered HTTP 404).",
         f"- `ny_local_law_index` is the State's older index as the Local Geohistory Project published it, and the [Zenodo record]({nyindex.RECORD}) names its license \"Creative Commons Zero v1.0 Universal\" ([CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/)). Its records are the State's: the release's [README]({nyindex.REPOSITORY}) says the DataPerfect files in it \"were created by the State of New York\". Like `ny_local_laws`, the table records facts about each filing, namely who filed it, the law's year and number, its dates and pages, and its title and subject as the State recorded them, and holds none of the laws' text. Cite it as {nyindex.CREATOR}, \"{nyindex.TITLE}\", v1.0.0, Local Geohistory Project, December 31, 2023, [doi:{nyindex.DOI}](https://doi.org/{nyindex.DOI}).",
         f"- `federally_recognized_tribes` is taken from notices the Bureau of Indian Affairs published in the Federal Register, each signed by its Assistant Secretary—Indian Affairs. They are works of the United States Government, and \"Copyright protection under this title is not available for any work of the United States Government\" ([17 U.S.C. § 105]({USC_105})). Cite the list as Bureau of Indian Affairs, \"{tribes.TITLE}\", {tribe_source['citation']} ({day(tribe_source['published'])}).",
@@ -708,7 +704,7 @@ def render(manifest):
         "",
         f"Every local government the Census Bureau's 2022 Census of Governments counts, {stats['governments']:,} of them in the 50 states and the District of Columbia; which of them have ordinance text in [LOCUS]({LOCUS_URL}), a public corpus of local ordinances; and every local law in the New York Department of State's online search, {stats['ny']['filings']:,} filings, with the State's older index of local laws, {stats['ny_index']['rows']:,} rows, each matched where it can be to the government that filed it. It maps who makes local law, how much of that law LOCUS holds, and, for New York, the local laws its governments have filed with the state since 1998 and, in the older index, with law years back to {stats['ny_index']['first_law_year']}; the laws' text is not here. Beside them, `federally_recognized_tribes` lists the {stats['tribes']['rows']:,} entries of the Bureau of Indian Affairs' list of federally recognized Tribes, whose governments the Census does not count among local governments, and `nfip_communities` the {stats['nfip']['rows']:,} communities in FEMA's Community Status Book, {stats['nfip']['participating']:,} of which participate in the National Flood Insurance Program, whose communities agree to adopt floodplain management regulations.",
         "",
-        f"Every row is built by code: the Census files, LOCUS and New York's older index from versions pinned by SHA-256 or commit, which the build checks against each other, and the index against the State's own file in its release; the Bureau's list from its notice in the Federal Register, pinned by SHA-256 and checked against the notice it updates; New York's filings from the Department's search API as it answered on {day(ny['finished_at'])}, checked against the API's own counts; and the flood insurance communities from FEMA's report as fema.gov served it on {day(manifest['sources']['nfip_communities']['retrieved_at'])}, checked against OpenFEMA's copy of the book. The only hand-made input to the rows is {len(locus.ALIASES)} name aliases for LOCUS, listed under Matching. The pipeline and its tests are in [{GITHUB.removeprefix('https://')}]({GITHUB}), and this card is rendered from `manifest.json` in the same commit.",
+        f"Every row is built by code: the Census files, LOCUS and New York's older index from versions pinned by SHA-256 or commit, which the build checks against each other, and the index against the State's own file in its release; the Bureau's list from its notice in the Federal Register, pinned by SHA-256 and checked against the notice it updates; New York's filings from the Department's search API as it answered on {day(ny['finished_at'])}, checked against the API's own counts; and the flood insurance communities from FEMA's report as fema.gov served it on {day(manifest['sources']['nfip_communities']['retrieved_at'])}, checked against OpenFEMA's copy of the book. The LOCUS crosswalk has no hand-made input. The pipeline and its tests are in [{GITHUB.removeprefix('https://')}]({GITHUB}), and this card is rendered from `manifest.json` in the same commit.",
         "",
     ]
     readings = source_readings(manifest)

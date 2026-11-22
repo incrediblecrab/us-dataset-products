@@ -76,6 +76,10 @@ def summarize(governments, crosswalk, ny, index, recognized, communities):
         return sorted(f"{row['locus_state']}/{row['locus_name']}" for row in rows)
 
     located = [row for row in crosswalk if row["census_id"]]
+    # What the name rules alone give for the GEOID matches. A single government is always the GEOID's, and a pool always holds it: match_names stops otherwise.
+    named = [row["name_match"] for row in crosswalk if row["match"] == "geoid"]
+    name_check = {"single": sum(1 for match in named if match not in locus.POOLED and match != "unmatched"), "pooled": sum(1 for match in named if match in locus.POOLED),
+                  "none": sum(1 for match in named if match == "unmatched")}
     return {
         "governments": len(governments),
         "types": types,
@@ -85,6 +89,7 @@ def summarize(governments, crosswalk, ny, index, recognized, communities):
             "rows": sum(row["locus_rows"] for row in crosswalk),
             "matched": len(located),
             "matches": matches,
+            "geoid_name_check": name_check,
             "matched_few_mentions": sum(1 for row in located if row["text_fits"] is None and row["text_mentions"] < locus.MIN_MENTIONS),
             "matched_without_mentions": names(row for row in located if row["text_mentions"] == 0),
             "text_differs": names(row for row in crosswalk if row["text_fits"] is False),

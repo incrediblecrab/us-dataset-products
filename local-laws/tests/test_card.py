@@ -6,7 +6,7 @@ import re
 
 import yaml
 
-from local_laws import locus, nfip, precision, tribes
+from local_laws import REPO_ID, locus, nfip, precision, tribes
 from local_laws.build import manifest_text
 from local_laws.card import NY_OUTSIDE, render
 from local_laws.schema import TABLES
@@ -81,38 +81,28 @@ def test_no_value_is_left_unfilled(published):
 
 def test_the_card_states_the_fixture_s_numbers(published):
     card = render(published[1])
-    assert "LOCUS has 25 jurisdictions, and 23 of them match one government here" in card
-    assert "The 9 aliases" in card and "The only hand-made input to the rows is 9 name aliases" in card
-    assert "It never names 5 of them that way: `ga/unified_government_of_georgetown-quitman_county_commission`, `ky/lexingtonfayetteco`, `ky/middlesboro`, `sd/bison`, `tn/metro_government_of_nashville_and_davidson_county`." in card
-    assert "- 1 other LOCUS jurisdiction is `ambiguous` or `unmatched`: `oh/nowhere_village`." in card
+    assert "LOCUS has 16 jurisdictions, and 14 of them match one government here" in card
+    assert "As a check, the name rules are also run on every GEOID match: for 2 they give a single government, always the GEOID's; for 1 they leave several same-name governments, always including the GEOID's, and the GEOID decides; for 0 no name fits." in card
+    assert "The LOCUS crosswalk has no hand-made input." in card
+    assert "It never names 1 of them that way: `SD/Bison`." in card
+    assert "- 2 LOCUS jurisdictions are `ambiguous` or `unmatched`: `KS/Howard`, `OH/Nowhere Village`." in card
     assert "- Dependent public school systems, 1 in the Census file, are left out" in card
 
 
-def differs(manifest, names, revision=None):
-    manifest = copy.deepcopy(manifest)
-    manifest["stats"]["locus"]["text_differs"] = sorted(names)
-    if revision:
-        manifest["sources"]["locus"]["revision"] = revision
-    return render(manifest)
-
-
-def test_differing_matches_are_called_read_by_hand_only_when_they_were(published):
+def test_differing_matches_are_listed_as_unread(published):
     manifest = published[1]
-    assert manifest["stats"]["locus"]["text_differs"] == ["co/creede", "ma/barnstable_town"]
-    card = render(manifest)
-    assert "It differs for 2. Each of those was read by hand against LOCUS's text on September 25, 2026, and each is the government LOCUS means, named with another word." in card
-    assert locus.REVIEW_FINDING not in card, "the finding describes the full reviewed set only"
-    assert f"named with another word: {locus.REVIEW_FINDING}." in differs(manifest, locus.REVIEWED_DIFFERS)
-    assert "It differs for 3, and 1 of those has not been read by hand: `xx/unread`." in differs(manifest, ["co/creede", "ma/barnstable_town", "xx/unread"])
-    assert "and 2 of those have not been read by hand: `co/creede`, `ma/barnstable_town`." in differs(manifest, ["co/creede", "ma/barnstable_town"], revision="0" * 40), "a review at one LOCUS revision says nothing about another"
-    assert "It differs for" not in differs(manifest, [])
+    assert "It differs for 2, not read by hand at this revision: `CO/Creede`, `MA/Barnstable Town`." in render(manifest)
+    manifest["stats"]["locus"]["text_differs"] = []
+    assert "It differs for" not in render(manifest)
 
 
-def test_the_howard_gap_is_stated_only_while_ks_howard_is_ambiguous(published):
-    manifest = copy.deepcopy(published[1])
-    assert "Howard, Kansas" in render(manifest)
-    manifest["stats"]["locus"]["ambiguous"] = []
-    assert "Howard, Kansas" not in render(manifest)
+def test_the_previous_crosswalk_and_current_sections_can_be_found(published):
+    card = render(published[1])
+    previous = locus.PREVIOUS
+    assert f"{previous['still_matched']:,} are still matched and {previous['no_longer_matched']:,} are not; {previous['newly_matched']:,} governments are newly matched" in card
+    assert f"https://huggingface.co/datasets/{REPO_ID}/tree/9f306bb2" in card
+    assert f"{locus.REPO_ID}@{locus.REVISION}/sections/*.parquet" in card
+    assert "ON s.document_id = c.locus_document_id\nWHERE c.census_id = '135964'" in card
 
 
 def test_the_population_year_is_the_commonest_and_ties_go_to_the_later_year(published):

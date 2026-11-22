@@ -1,8 +1,9 @@
-"""A crosswalk from LOCUS v1.0, a public dataset of local ordinance text, to the governments in the Census file.
-It records which jurisdictions LOCUS covers, how many rows each has, and how its text names each government. It holds none of the text, which LOCUS licenses CC BY-NC 4.0."""
+"""A crosswalk from LOCUS v1.1 to the governments in the Census file, by GEOID and then by name. It records which jurisdictions LOCUS covers, how many sections each has, and how its text names each government. It holds none of the text, which LOCUS licenses CC BY-NC 4.0."""
 
 import re
+import unicodedata
 from collections import Counter, defaultdict
+from pathlib import Path
 
 import pyarrow.parquet as pq
 
@@ -10,10 +11,13 @@ from .census import SourceChanged
 from .store import hub_read
 
 REPO_ID = "LocalLaws/LOCUS-v1"
-# The dataset's head commit on September 25, 2026 (last modified June 20, 2026). Reading a pinned commit keeps the crosswalk reproducible.
-REVISION = "4cee954ca8ad8e31cb0502dff6682c87b74b4302"
+# LOCUS v1.1, the head on November 16, 2026, reviewed November 22, 2026.
+REVISION = "99354c417ed5cda88bf3f4bf36a3336fd24f101f"
 LICENSE = "cc-by-nc-4.0"
-COLUMNS = ["state", "source_jurisdiction_type", "city", "county"]
+COLUMNS = ["document_id", "state", "jurisdiction_type", "jurisdiction_name", "jurisdiction_geoid"]
+# Measured November 22, 2026 by comparing the last v1.0 build's crosswalk with the first v1.1 build.
+PREVIOUS = {"revision": "4cee954ca8ad8e31cb0502dff6682c87b74b4302", "until": "2026-11-22", "jurisdictions": 2287, "matched": 2286,
+            "still_matched": 1812, "no_longer_matched": 474, "newly_matched": 548, "dataset_commit": "9f306bb249e7ca29fcf36f332b49e34e1081b527"}
 
 # Census name titles, longest first so that CITY AND COUNTY OF wins over CITY OF.
 PREFIXES = ("CITY AND COUNTY OF", "CITY AND BOROUGH OF", "CONSOLIDATED GOVERNMENT OF", "METROPOLITAN GOVERNMENT OF", "METRO GOVERNMENT OF", "UNIFIED GOVERNMENT OF",
@@ -34,31 +38,17 @@ KINDS = {
 MUNICIPAL_KINDS = ("city", "town", "village", "borough")
 CITY_SUFFIXES = (("chrtr_township", "township"), ("charter_township", "township"), ("chartertownship", "township"), ("township", "township"), ("twp", "township"),
                  ("town", "town"), ("city", "city"), ("village", "village"), ("borough", "borough"), ("plantation", "plantation"))
-# Suffixes LOCUS sometimes writes without an underscore (newyorkcity, conemaughtwp, bedfordbor). "town" is left out: too many names end in it (georgetown).
+# "town" is left out: too many names end in it (Georgetown).
 GLUED_SUFFIXES = (("township", "township"), ("twp", "township"), ("city", "city"), ("borough", "borough"), ("bor", "borough"))
 COUNTY_PREFIXES = ("unified_government_of_", "city_and_county_of_", "city_and_borough_of_", "city_borough_of_", "borough_of_", "county_of_", "parish_of_", "municipality_of_")
 COUNTY_SUFFIXES = ("_parish_police_jury", "_parish_council", "_parish_government", "_county_commission", "_county_consolidated_government", "_county_-_unified_government",
                    "_county_unified_government", "_consolidated_government", "_county_government", "_county", "_parish", "_borough", "_census_area", "_municipality")
-# The Census mostly writes ST, MOUNT and FORT; LOCUS mostly writes saint and mount, sometimes glued to the next word (mountpulaski). Both sides are reduced to st, mt and ft.
+# Both sides are reduced to st, mt and ft.
 SHORT = (("saint", "st"), ("mount", "mt"), ("fort", "ft"))
 TRAILING_TYPES = ("CITY", "TOWN", "VILLAGE", "BOROUGH", "TOWNSHIP")
-# LOCUS writes a county after some names: thornapple_township,_(barry_co.), porter_township,_(van_buren_county), harrison,_calumet_co.
+# A county after a comma qualifies the name.
 COUNTY_HINT = re.compile(r",_?\(?([a-z_.' -]+?)_(?:co\.?|county)\)?$")
 GENERAL_PURPOSE = ("county", "municipal", "township")
-# LOCUS jurisdictions whose names no rule below reads, each checked by hand against the Census file and LOCUS's text on September 25, 2026: (state, LOCUS type, LOCUS name) -> (census_id, Census name).
-# aurel and aust are cut-off names: their text calls itself the City of Aurelia and the City of Austin (Scott County).
-# The build stops if the Census name at that census_id changes or LOCUS no longer has the jurisdiction.
-ALIASES = {
-    ("in", "counties", "indianapolis_marion_county"): ("207957", "CITY OF INDIANAPOLIS"),
-    ("ga", "counties", "unified_government_of_georgetown-quitman_county_commission"): ("161958", "UNIFIED GOVERNMENT OF GEORGETOWN AND QUITMAN COUNTY"),
-    ("ky", "cities", "lexingtonfayetteco"): ("165831", "URBAN COUNTY GOVERNMENT OF LEXINGTON-FAYETTE"),
-    ("la", "counties", "lafayette_city-parish_consolidated_government"): ("166076", "CITY-PARISH OF LAFAYETTE"),
-    ("tn", "counties", "metro_government_of_nashville_and_davidson_county"): ("175728", "METROPOLITAN GOVERNMENT OF NASHVILLE-DAVIDSON COUNTY"),
-    ("ky", "cities", "middlesboro"): ("127573", "CITY OF MIDDLESBOROUGH"),
-    ("ny", "cities", "hempstead_bzo_town"): ("170895", "TOWN OF HEMPSTEAD"),
-    ("ia", "cities", "aurel"): ("164335", "CITY OF AURELIA"),
-    ("in", "cities", "aust"): ("126082", "CITY OF AUSTIN"),
-}
 
 # The type words looked for in the text, and the ones each Census title accepts.
 TEXT_TYPES = ("city", "town", "village", "borough", "township", "plantation", "county", "parish", "municipality")
@@ -70,16 +60,16 @@ MIN_MENTIONS = 3
 MIN_SHARE = 2 / 3
 # What each match value means, in the order the card lists them.
 MATCH_DOCS = {
-    "alias": "Listed by hand in `ALIASES` in `local_laws/locus.py`, after reading the Census file and the jurisdiction's text: names no rule reads, such as `indianapolis_marion_county` for CITY OF INDIANAPOLIS, or the cut-off `aurel` for CITY OF AURELIA",
-    "name": "The name alone fits one government in the state: a municipality or township for LOCUS's `cities`, a county for its `counties`",
-    "name_county": "The name and the county LOCUS writes after it fit one government (`harrison,_calumet_co`: VILLAGE OF HARRISON, in Calumet County)",
-    "name_type": "The name without its type word fits one government with that title (`batavia_city`: CITY OF BATAVIA, not TOWN OF BATAVIA)",
-    "name_type_county": "The name, its type word and the county after it fit one government (`bedford_township,_(monroe_co.)`: TOWNSHIP OF BEDFORD, in Monroe County)",
-    "name_type_differs": "No government of the name has the title LOCUS's type word gives, and exactly one municipality has the name under another title (`barnstable_town`: CITY OF BARNSTABLE)",
-    "name_variant": "Fits one government only once a second title or a trailing type word is dropped from the Census name (`creede`: TOWN OF CITY OF CREEDE)",
-    "consolidated": "A `counties` name fits one consolidated city-county, which the Census counts as a municipal government (`macon-bibb_county`: COUNTY OF MACON-BIBB)",
-    "text_type": "Several governments share the name, and the type word the text writes with it fits exactly one of them (`vt/barre`: the text says Town of Barre, so TOWN OF BARRE rather than CITY OF BARRE). The word needs at least 3 mentions and two-thirds of the mentions that fit any candidate",
-    "text_county": "Several same-name governments in different counties, and the text names one of those counties in at least 3 mentions and two-thirds of all mentions of them (`nj/franklin_township`: Gloucester County)",
+    "geoid": "The Census GEOID fits one government: state and county FIPS for a county (5 digits), state and place for a municipality (7), or state, county and subdivision for a township (10)",
+    "name": "The name alone fits one government in the state",
+    "name_county": "The name and the county written after it fit one government",
+    "name_type": "The name without its type word fits one government with that title",
+    "name_type_county": "The name, its type word and the county after it fit one government",
+    "name_type_differs": "No government of the name has the title LOCUS's type word gives, and exactly one municipality has the name under another title (Barnstable Town: CITY OF BARNSTABLE)",
+    "name_variant": "Fits one government only once a second title or a trailing type word is dropped from the Census name (Creede: TOWN OF CITY OF CREEDE)",
+    "consolidated": "A county or city-county name fits one consolidated government, which the Census counts as municipal (Honolulu: CITY AND COUNTY OF HONOLULU)",
+    "text_type": "Several governments share the name, and the type word the text writes with it fits exactly one of them. The word needs at least 3 mentions and two-thirds of the mentions that fit any candidate",
+    "text_county": "Several same-name governments lie in different counties, and the text names one of those counties in at least 3 mentions and two-thirds of all mentions of them",
     "municipal_preferred": "The name fits one municipality and one or more townships, the text does not settle which, and the municipality is taken: the least certain match",
     "ambiguous": "Several governments fit and neither the name nor the text settles which, so `census_id` is null and `candidates` lists them",
     "unmatched": "No government in the Census file fits",
@@ -88,16 +78,6 @@ MATCHES = tuple(MATCH_DOCS)
 MATCHED = MATCHES[:-2]
 # The matches that choose among several same-name governments, whose candidates are kept.
 POOLED = ("text_type", "text_county", "municipal_preferred", "ambiguous")
-# The matches at REVISION whose text most often writes another type word than the Census title's, each read by hand against LOCUS's text on September 25, 2026, with what the reading found.
-# The card repeats REVIEW_FINDING only while the published matches that differ are exactly these.
-REVIEWED_DIFFERS = frozenset({
-    "ak/skagway_borough", "al/moundville", "co/creede", "co/lake_city", "co/orchard_city", "fl/cross_city", "ia/corydon", "la/winnsboro", "ma/barnstable_town",
-    "ma/greenfield_town", "md/ocean_city", "ne/bennet", "ne/franklin", "nm/silver_city", "oh/newlexington", "ok/lexington", "ok/seiling", "or/monmouth",
-    "sc/lexington", "sc/manning", "tx/bandera", "tx/bigsandy", "tx/canadian", "tx/clarksville_city", "tx/clyde", "tx/henrietta", "tx/livingston",
-    "tx/mount_vernon", "tx/panhandle", "tx/spearman", "tx/woodsboro", "tx/woodville", "va/gate_city", "wa/republic", "wv/ceredo", "wy/newcastle",
-})
-REVIEW_FINDING = ("25 towns and villages whose code says City of (11 of them in Texas), 8 cities whose code says Town of (Barnstable and Greenfield, Massachusetts, among them), "
-                  "Skagway, whose code says Municipality, and 2 codes that name their county more often than themselves (Lexington, South Carolina, and Franklin, Nebraska)")
 
 
 def latest():
@@ -117,7 +97,12 @@ def stated_rows(api=None):
     card = hub_read(api.dataset_info, REPO_ID, revision=REVISION).card_data.to_dict()
     if card.get("license") != LICENSE:
         raise SourceChanged(f"LOCUS's license is {card.get('license')!r}, not {LICENSE}: the card's License section needs review")
-    return sum(split["num_examples"] for split in card["dataset_info"]["splits"])
+    path = hub_read(api.hf_hub_download, REPO_ID, "README.md", repo_type="dataset", revision=REVISION)
+    lines = [line for line in Path(path).read_text(encoding="utf-8").splitlines() if line.startswith("| `sections` |")]
+    count = re.fullmatch(r"\| `sections` \| ([0-9]{1,3}(?:,[0-9]{3})*) \| [^|]+ \|", lines[0]) if len(lines) == 1 else None
+    if count is None:
+        raise SourceChanged("expected one sections row with a count in LOCUS's README")
+    return int(count[1].replace(",", ""))
 
 
 def download(directory, api=None):
@@ -126,28 +111,33 @@ def download(directory, api=None):
 
     api = api or HfApi(token=False)
     stated = stated_rows(api)
-    files = sorted(path for path in hub_read(api.list_repo_files, REPO_ID, repo_type="dataset", revision=REVISION) if path.startswith("data/") and path.endswith(".parquet"))
+    files = sorted(path for path in hub_read(api.list_repo_files, REPO_ID, repo_type="dataset", revision=REVISION) if path.startswith("sections/") and path.endswith(".parquet"))
     if not files:
-        raise SourceChanged(f"no parquet files in {REPO_ID} at {REVISION}")
+        raise SourceChanged(f"no sections parquet files in {REPO_ID} at {REVISION}")
     paths = [hub_read(api.hf_hub_download, REPO_ID, path, repo_type="dataset", revision=REVISION, local_dir=directory) for path in files]
     return paths, stated
 
 
-def jurisdiction_key(state, kind, city, county):
-    name = city if kind == "cities" else county if kind == "counties" else None
-    if not name or not state:
-        raise SourceChanged(f"LOCUS row without a jurisdiction: {state!r} {kind!r} {city!r} {county!r}")
-    return state, kind, name
-
-
 def jurisdictions(paths):
-    """[{locus_state, locus_jurisdiction_type, locus_name, locus_rows}] for every jurisdiction in the files, reading only the identifying columns."""
+    """Count sections by document and check the document-to-jurisdiction mapping across files."""
     counts = Counter()
+    documents, names = {}, {}
     for path in paths:
         table = pq.read_table(path, columns=COLUMNS)
         for row in table.group_by(COLUMNS).aggregate([([], "count_all")]).to_pylist():
-            counts[jurisdiction_key(row["state"], row["source_jurisdiction_type"], row["city"], row["county"])] += row["count_all"]
-    return [{"locus_state": state, "locus_jurisdiction_type": kind, "locus_name": name, "locus_rows": rows} for (state, kind, name), rows in sorted(counts.items())]
+            doc, state, kind, name, geoid = (row[column] for column in COLUMNS)
+            if not all((doc, state, kind, name)):
+                raise SourceChanged(f"LOCUS row without a document or jurisdiction: {doc!r} {state!r} {kind!r} {name!r}")
+            if kind not in ("city", "county", "city-county", "other"):
+                raise SourceChanged(f"unknown LOCUS jurisdiction type {kind!r}")
+            jurisdiction = state, kind, name, geoid
+            if documents.setdefault(doc, jurisdiction) != jurisdiction:
+                raise SourceChanged(f"LOCUS document {doc} maps to multiple jurisdictions")
+            if names.setdefault((state, kind, name), doc) != doc:
+                raise SourceChanged(f"LOCUS jurisdiction {state}/{kind}/{name} maps to multiple documents")
+            counts[doc] += row["count_all"]
+    return [{"locus_document_id": doc, "locus_state": state, "locus_jurisdiction_type": kind, "locus_name": name, "locus_geoid": geoid, "locus_rows": counts[doc]}
+            for doc, (state, kind, name, geoid) in sorted(documents.items())]
 
 
 def key(text):
@@ -196,18 +186,25 @@ def title_words(entry):
 
 
 class Index:
-    """General-purpose governments by (state, core name); counties and consolidated governments also by their county area name."""
+    """General-purpose governments by GEOID and (state, core name); counties and consolidated governments also by county area name."""
 
     def __init__(self, governments):
+        self.by_geoid = defaultdict(list)
         self.by_core = defaultdict(list)
         self.by_variant = defaultdict(list)
         self.by_county_name = defaultdict(list)
         self.entries = {}
-        self.names = {}
         for row in governments:
-            self.names[row["census_id"]] = row["name"]
             if row["government_type"] not in GENERAL_PURPOSE:
                 continue
+            kind = row["government_type"]
+            codes = [row["state_fips"]]
+            if kind in ("county", "township"):
+                codes.append(row["county_fips"])
+            if kind in ("municipal", "township"):
+                codes.append(row["fips_place"])
+            if None not in codes:
+                self.by_geoid["".join(codes)].append(row["census_id"])
             title, core, variants = title_and_core(row["name"])
             entry = {"census_id": row["census_id"], "type": row["government_type"], "title": title, "county": key(row["county_name"] or ""),
                      "name": row["name"], "county_name": row["county_name"]}
@@ -297,31 +294,39 @@ def match_county(index, state, name):
     return (None, "ambiguous", ambiguous) if ambiguous else (None, "unmatched", [])
 
 
+def match_name(index, state, kind, name):
+    name = "_".join(unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode().lower().split())
+    if kind in ("city", "other"):
+        return match_city(index, state, name)
+    result = match_county(index, state, name)
+    if result[1] == "unmatched":
+        fallback = match_city(index, state, name)
+        if kind == "city-county" or fallback[1] in ("name_type", "name_type_county"):
+            return fallback
+    return result
+
+
 def match_names(index, jurisdictions):
-    """The crosswalk rows from names alone, before any text is read."""
-    for (state, kind, name), (census_id, expected) in ALIASES.items():
-        if index.names.get(census_id) != expected or census_id not in index.entries:
-            raise SourceChanged(f"alias {state}/{kind}/{name} expects general-purpose government {census_id} to be {expected!r}, the Census file has {index.names.get(census_id)!r}")
-    unused = set(ALIASES) - {(j["locus_state"], j["locus_jurisdiction_type"], j["locus_name"]) for j in jurisdictions}
-    if unused:
-        raise SourceChanged(f"aliases for jurisdictions LOCUS no longer has: {sorted(unused)}")
+    """Match GEOIDs and cross-check by name; keep the name result where no government has the GEOID."""
     rows = []
     for jurisdiction in jurisdictions:
-        kind, state, name = jurisdiction["locus_jurisdiction_type"], jurisdiction["locus_state"], jurisdiction["locus_name"]
-        if (state, kind, name) in ALIASES:
-            census_id, match, candidates = ALIASES[(state, kind, name)][0], "alias", []
-        elif kind == "cities":
-            census_id, match, candidates = match_city(index, state, name)
-        elif kind == "counties":
-            census_id, match, candidates = match_county(index, state, name)
-            if match == "unmatched":
-                # LOCUS files a few townships under counties, such as porter_township,_(van_buren_county). Only a name that carries its type word is read this way.
-                fallback = match_city(index, state, name)
-                if fallback[1] in ("name_type", "name_type_county"):
-                    census_id, match, candidates = fallback
-        else:
-            raise SourceChanged(f"unknown LOCUS jurisdiction type {kind!r}")
-        rows.append(dict(jurisdiction, census_id=census_id, match=match, candidates=candidates))
+        state, name, geoid = jurisdiction["locus_state"], jurisdiction["locus_name"], jurisdiction["locus_geoid"]
+        if geoid is not None and len(geoid) not in (5, 7, 10):
+            raise SourceChanged(f"unexpected LOCUS GEOID length: {state}/{name} {geoid!r}")
+        ids = index.by_geoid.get(geoid, [])
+        if len(ids) > 1:
+            raise SourceChanged(f"LOCUS GEOID {geoid} fits multiple governments: {ids}")
+        census_id, match, candidates = match_name(index, state.lower(), jurisdiction["locus_jurisdiction_type"], name)
+        name_match = None
+        if ids:
+            uid = ids[0]
+            if match in POOLED and uid not in candidates:
+                raise SourceChanged(f"LOCUS's GEOID government is not among its name candidates: {state}/{name} {uid} not in {candidates}")
+            if match not in POOLED and census_id is not None and census_id != uid:
+                raise SourceChanged(f"LOCUS's GEOID and its name name different governments: {state}/{name} {uid} and {census_id}")
+            name_match = match
+            census_id, match, candidates = uid, "geoid", []
+        rows.append(dict(jurisdiction, census_id=census_id, match=match, name_match=name_match, candidates=candidates))
     return rows
 
 
@@ -377,10 +382,10 @@ class Target:
 def read_text(paths, targets):
     """One pass over LOCUS's text, feeding each row to its jurisdiction's Target."""
     for path in paths:
-        for batch in pq.ParquetFile(path).iter_batches(batch_size=20_000, columns=COLUMNS + ["content"]):
+        for batch in pq.ParquetFile(path).iter_batches(batch_size=20_000, columns=["document_id", "content"]):
             data = batch.to_pydict()
-            for state, kind, city, county, content in zip(data["state"], data["source_jurisdiction_type"], data["city"], data["county"], data["content"]):
-                target = targets.get(jurisdiction_key(state, kind, city, county))
+            for doc, content in zip(data["document_id"], data["content"]):
+                target = targets.get(doc)
                 if target is not None and content:
                     target.read(content)
 
@@ -422,10 +427,10 @@ def crosswalk(paths, governments):
     for row in rows:
         ids = [row["census_id"]] if row["candidates"] == [] and row["census_id"] else row["candidates"]
         if ids:
-            targets[(row["locus_state"], row["locus_jurisdiction_type"], row["locus_name"])] = Target([index.entries[census_id] for census_id in ids])
+            targets[row["locus_document_id"]] = Target([index.entries[census_id] for census_id in ids])
     read_text(paths, targets)
     for row in rows:
-        target = targets.get((row["locus_state"], row["locus_jurisdiction_type"], row["locus_name"]))
+        target = targets.get(row["locus_document_id"])
         if target is None:
             row.update(text_type=None, text_type_mentions=None, text_mentions=None, text_fits=None)
             continue

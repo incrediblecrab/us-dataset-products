@@ -48,6 +48,10 @@ def check_governments(rows, problems):
 
 def check_crosswalk(rows, government_ids, problems):
     """government_ids is None when the governments table was not read, so no census_id is judged against it."""
+    docs = Counter(row["locus_document_id"] for row in rows)
+    invalid = [doc for doc, n in docs.items() if not doc or n > 1]
+    if invalid:
+        problems.append(f"locus_crosswalk: missing or duplicate locus_document_id: {sample(invalid)}")
     keys = Counter((row["locus_state"], row["locus_jurisdiction_type"], row["locus_name"]) for row in rows)
     repeated = [f"{state}/{kind}/{name}" for (state, kind, name), n in keys.items() if n > 1]
     if repeated:
@@ -58,6 +62,11 @@ def check_crosswalk(rows, government_ids, problems):
     unmatched = set(locus.MATCHES) - set(locus.MATCHED)
     for row in rows:
         name = f"{row['locus_state']}/{row['locus_name']}"
+        geoid = row["match"] == "geoid"
+        if (row["name_match"] is not None) != geoid or (geoid and row["name_match"] not in locus.MATCHES[1:]):
+            problems.append(f"locus_crosswalk: {name} is {row['match']} with name_match {row['name_match']!r}")
+        if geoid and row["locus_geoid"] is None:
+            problems.append(f"locus_crosswalk: {name} is geoid without locus_geoid")
         if (row["census_id"] is None) != (row["match"] in unmatched):
             problems.append(f"locus_crosswalk: {name} is {row['match']} with census_id {row['census_id']!r}")
         if government_ids is not None and row["census_id"] is not None and row["census_id"] not in government_ids:

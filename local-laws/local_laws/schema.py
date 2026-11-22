@@ -43,12 +43,15 @@ GOVERNMENT_DOCS = {
 }
 
 LOCUS_CROSSWALK = pa.schema([
+    ("locus_document_id", pa.string()),
     ("locus_state", pa.string()),
     ("locus_jurisdiction_type", pa.string()),
     ("locus_name", pa.string()),
+    ("locus_geoid", pa.string()),
     ("locus_rows", pa.int64()),
     ("census_id", pa.string()),
     ("match", pa.string()),
+    ("name_match", pa.string()),
     ("candidates", pa.list_(pa.string())),
     ("text_type", pa.string()),
     ("text_type_mentions", pa.int64()),
@@ -57,13 +60,16 @@ LOCUS_CROSSWALK = pa.schema([
 ])
 
 LOCUS_DOCS = {
-    "locus_state": "LOCUS's `state`: a lowercase postal abbreviation",
-    "locus_jurisdiction_type": "LOCUS's `source_jurisdiction_type`: `cities` or `counties`",
-    "locus_name": "LOCUS's `city` value for cities and `county` value for counties, as LOCUS writes it, such as batavia_city or saint_tammany_parish",
-    "locus_rows": "How many rows LOCUS holds for this jurisdiction at the pinned revision",
+    "locus_document_id": "LOCUS's `document_id`: unique in the crosswalk; join to LOCUS sections on this column",
+    "locus_state": "LOCUS's `state`: an uppercase postal abbreviation",
+    "locus_jurisdiction_type": "LOCUS's `jurisdiction_type`: `city`, `county`, `city-county` or `other`",
+    "locus_name": "LOCUS's `jurisdiction_name` as written, such as Barre or Barnstable Town",
+    "locus_geoid": "LOCUS's `jurisdiction_geoid`: a county, place or county-subdivision Census GEOID, with leading zeros; null where LOCUS gives none",
+    "locus_rows": "How many sections LOCUS holds for this jurisdiction at the pinned revision",
     "census_id": "The matched government in `governments`; null when `match` is `ambiguous` or `unmatched`",
     "match": "How `census_id` was found, one of the methods under Matching",
-    "candidates": "When several same-name governments fit (`municipal_preferred`, `text_type`, `text_county` and `ambiguous`), the `census_id` of each; otherwise empty",
+    "name_match": "For a `geoid` match, what the name rules alone give, before reading text; null for every other match",
+    "candidates": "For a name fallback with several candidates (`municipal_preferred`, `text_type`, `text_county` or `ambiguous`), the `census_id` of each; otherwise empty, including for GEOID matches",
     "text_type": "The type word LOCUS's text most often writes with the government's name, counted over all the jurisdiction's rows: `city` for \"City of Batavia\" or \"Batavia City\". The words looked for are city, town, village, borough, township, plantation, county, parish and municipality. For several candidates, their names are all looked for. Null when the text never writes the name with one of these words, or when no government fits",
     "text_type_mentions": "How many times the text writes `text_type` with the name",
     "text_mentions": "How many times the text writes the name with any of the type words. 0 means the text never names the government this way, which can mean a Census name the text does not use (METROPOLITAN GOVERNMENT OF NASHVILLE-DAVIDSON COUNTY) or text filed under the wrong jurisdiction",

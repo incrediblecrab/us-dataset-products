@@ -35,61 +35,43 @@ def three(text):
     return [text] * 3
 
 
-# (state, LOCUS type, name) -> the rows' text. Each is written to reach one matching rule; EXPECTED says which.
+# (document_id, state, type, name, GEOID) -> synthetic section text.
 LOCUS = {
-    ("al", "counties", "autauga_county"): three("The governing body of Autauga County adopts this chapter."),
-    ("al", "cities", "prattville"): three("It is unlawful within the City of Prattville to park on a sidewalk.") + [None],
-    ("vt", "cities", "barre"): three("The Selectboard of the Town of Barre may appoint a constable."),
-    ("ny", "cities", "batavia_city"): three("The City of Batavia shall keep a register of dogs."),
-    ("il", "cities", "belvidere"): three("Belvidere City Council meetings are held monthly.") + ["Board of Belvidere Township."],
-    ("nj", "cities", "franklin_township"): three("The Township of Franklin, in Gloucester County, requires a permit."),
-    ("ks", "cities", "howard"): ["The City of Howard levies a tax."],
-    ("sd", "cities", "bison"): ["No person shall burn refuse."],
-    ("wi", "cities", "harrison,_calumet_co"): three("The Village of Harrison board shall meet."),
-    ("mi", "cities", "bedford_township,_(monroe_co.)"): three("Bedford Township zoning ordinance."),
-    ("co", "cities", "creede"): three("The City of Creede, a statutory town."),
-    ("ma", "cities", "barnstable_town"): three("The Town of Barnstable shall license moorings."),
-    ("ga", "counties", "macon-bibb_county"): three("Macon-Bibb County code of ordinances."),
-    ("ak", "cities", "anchorage"): three("The Municipality of Anchorage assembly."),
-    ("la", "counties", "saint_tammany_parish"): three("St. Tammany Parish council."),
-    ("in", "counties", "indianapolis_marion_county"): three("The City of Indianapolis and Marion County."),
-    ("ga", "counties", "unified_government_of_georgetown-quitman_county_commission"): three("Georgetown-Quitman County commission."),
-    ("ky", "cities", "lexingtonfayetteco"): three("Lexington-Fayette Urban County Government."),
-    ("la", "counties", "lafayette_city-parish_consolidated_government"): three("Lafayette City-Parish Council."),
-    ("tn", "counties", "metro_government_of_nashville_and_davidson_county"): ["The Metropolitan Council shall meet."],
-    ("ky", "cities", "middlesboro"): three("City of Middlesboro."),
-    ("ny", "cities", "hempstead_bzo_town"): three("Building zone ordinance of the Town of Hempstead."),
-    ("ia", "cities", "aurel"): three("The City of Aurelia council."),
-    ("in", "cities", "aust"): three("The City of Austin, Indiana."),
-    ("oh", "cities", "nowhere_village"): three("The Village of Nowhere."),
+    ("doc_0001", "AL", "county", "Autauga County", "01001"): three("The governing body of Autauga County adopts this chapter."),
+    ("doc_0002", "AL", "city", "Prattville", "0162328"): three("It is unlawful within the City of Prattville to park on a sidewalk.") + [None],
+    ("doc_0003", "VT", "city", "Barre", "5002303250"): three("The Selectboard of the Town of Barre may appoint a constable."),
+    ("doc_0004", "NY", "city", "Batavia City", None): three("The City of Batavia shall keep a register of dogs."),
+    ("doc_0005", "IL", "city", "Belvidere", None): three("Belvidere City Council meetings are held monthly.") + ["Board of Belvidere Township."],
+    ("doc_0006", "NJ", "city", "Franklin Township", None): three("The Township of Franklin, in Gloucester County, requires a permit."),
+    ("doc_0007", "KS", "city", "Howard", None): ["The City of Howard levies a tax."],
+    ("doc_0008", "SD", "city", "Bison", None): ["No person shall burn refuse."],
+    ("doc_0009", "WI", "city", "Harrison, Calumet Co", None): three("The Village of Harrison board shall meet."),
+    ("doc_0010", "MI", "county", "Bedford Township, (Monroe Co.)", None): three("Bedford Township zoning ordinance."),
+    ("doc_0011", "CO", "city", "Creede", None): three("The City of Creede, a statutory town."),
+    ("doc_0012", "MA", "city", "Barnstable Town", None): three("The Town of Barnstable shall license moorings."),
+    ("doc_0013", "GA", "city-county", "Macon-Bibb County", "13021"): three("Macon-Bibb County code of ordinances."),
+    ("doc_0014", "AK", "city", "Anchorage", None): three("The Municipality of Anchorage assembly."),
+    ("doc_0015", "LA", "county", "Saint Tammany Parish", None): three("St. Tammany Parish council."),
+    ("doc_0016", "OH", "city", "Nowhere Village", None): three("The Village of Nowhere."),
 }
-# (census_id, match, text_fits) for each jurisdiction.
+# (census_id, match, name_match, text_fits) for each document.
 EXPECTED = {
-    ("al", "counties", "autauga_county"): ("100001", "name", True),
-    ("al", "cities", "prattville"): ("100019", "name", True),
-    ("vt", "cities", "barre"): ("135964", "text_type", True),
-    ("ny", "cities", "batavia_city"): ("109507", "name_type", True),
-    ("il", "cities", "belvidere"): ("162180", "text_type", True),
-    ("nj", "cities", "franklin_township"): ("170293", "text_county", True),
-    ("ks", "cities", "howard"): (None, "ambiguous", None),
-    ("sd", "cities", "bison"): ("187490", "municipal_preferred", None),
-    ("wi", "cities", "harrison,_calumet_co"): ("240470", "name_county", True),
-    ("mi", "cities", "bedford_township,_(monroe_co.)"): ("201942", "name_type_county", True),
-    ("co", "cities", "creede"): ("123750", "name_variant", False),
-    ("ma", "cities", "barnstable_town"): ("185811", "name_type_differs", False),
-    ("ga", "counties", "macon-bibb_county"): ("102163", "consolidated", True),
-    ("ak", "cities", "anchorage"): ("194463", "name", True),
-    ("la", "counties", "saint_tammany_parish"): ("166017", "name", True),
-    ("in", "counties", "indianapolis_marion_county"): ("207957", "alias", True),
-    ("ga", "counties", "unified_government_of_georgetown-quitman_county_commission"): ("161958", "alias", None),
-    ("ky", "cities", "lexingtonfayetteco"): ("165831", "alias", None),
-    ("la", "counties", "lafayette_city-parish_consolidated_government"): ("166076", "alias", True),
-    ("tn", "counties", "metro_government_of_nashville_and_davidson_county"): ("175728", "alias", None),
-    ("ky", "cities", "middlesboro"): ("127573", "alias", None),
-    ("ny", "cities", "hempstead_bzo_town"): ("170895", "alias", True),
-    ("ia", "cities", "aurel"): ("164335", "alias", True),
-    ("in", "cities", "aust"): ("126082", "alias", True),
-    ("oh", "cities", "nowhere_village"): (None, "unmatched", None),
+    "doc_0001": ("100001", "geoid", "name", True),
+    "doc_0002": ("100019", "geoid", "name", True),
+    "doc_0003": ("135964", "geoid", "municipal_preferred", True),
+    "doc_0004": ("109507", "name_type", None, True),
+    "doc_0005": ("162180", "text_type", None, True),
+    "doc_0006": ("170293", "text_county", None, True),
+    "doc_0007": (None, "ambiguous", None, None),
+    "doc_0008": ("187490", "municipal_preferred", None, None),
+    "doc_0009": ("240470", "name_county", None, True),
+    "doc_0010": ("201942", "name_type_county", None, True),
+    "doc_0011": ("123750", "name_variant", None, False),
+    "doc_0012": ("185811", "name_type_differs", None, False),
+    "doc_0013": ("102163", "consolidated", None, True),
+    "doc_0014": ("194463", "name", None, True),
+    "doc_0015": ("166017", "name", None, True),
+    "doc_0016": (None, "unmatched", None, None),
 }
 
 
@@ -98,14 +80,14 @@ def sha256(data):
 
 
 def write_locus(directory, jurisdictions=None):
-    """LOCUS-shaped parquet (two files, as LOCUS has several) holding only the columns the crosswalk reads, plus header. Returns (paths, rows)."""
+    """Two synthetic LOCUS sections files. Returns (paths, rows)."""
     rows = []
-    for (state, kind, name), texts in (jurisdictions or LOCUS).items():
+    for (doc, state, kind, name, geoid), texts in (LOCUS if jurisdictions is None else jurisdictions).items():
         for index, text in enumerate(texts):
-            rows.append({"header": f"§ {index + 1}", "content": text, "source_jurisdiction_type": kind, "state": state,
-                         "city": name if kind == "cities" else None, "county": name if kind == "counties" else None})
-    schema = pa.schema([(column, pa.string()) for column in ("header", "content", "source_jurisdiction_type", "state", "city", "county")])
-    directory = Path(directory) / "data"
+            rows.append({"document_id": doc, "section_index": index, "state": state, "jurisdiction_name": name, "jurisdiction_type": kind,
+                         "jurisdiction_geoid": geoid, "header": f"§ {index + 1}", "content": text})
+    schema = pa.schema([("document_id", pa.string()), ("section_index", pa.int64())] + [(column, pa.string()) for column in ("state", "jurisdiction_name", "jurisdiction_type", "jurisdiction_geoid", "header", "content")])
+    directory = Path(directory) / "sections"
     directory.mkdir(parents=True, exist_ok=True)
     half = len(rows) // 2
     paths = []
