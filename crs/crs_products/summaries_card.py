@@ -3,7 +3,7 @@
 import math
 from collections import defaultdict
 
-from .card import GITHUB, citation_lines, size_category
+from .card import GITHUB, citation_lines, last_sync_lines, size_category
 from .summaries import FIRST_CONGRESS, OVERLAP_HOURS, RECONCILE_HOURS, REPO_ID, RESYNC_DAYS, SCHEDULE_HOURS, SCHEMA, TYPES
 
 COLUMN_DOCS = {
@@ -61,8 +61,7 @@ def render(manifest):
             lines += ["", f"{missing:,} summaries that the API listed when their slice was last read in full are not here, and {len(windows):,} crowded seconds could not be read in full (see *Known gaps*). A slice whose count differs from its rows is read again at the next daily check."]
     else:
         lines.append("The first sync has not listed the API yet.")
-    if listing.get("at"):
-        lines += ["", f"Last complete sync: {listing['at']} UTC."]
+    lines += last_sync_lines(listing)
     lines += ["", "| Congress | Years | Rows | Listed | Slices read in full |", "|---|---|---:|---:|---:|"]
     by_congress = defaultdict(lambda: [0, 0, 0, 0])
     for key, entry in entries.items():

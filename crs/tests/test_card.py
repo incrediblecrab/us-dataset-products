@@ -1,8 +1,10 @@
 """The dataset card: front matter the Hub's own parser accepts, numbers taken from the manifest, every column documented."""
 
+import pytest
 import yaml
 from huggingface_hub import DatasetCard
 
+from crs_products import constitution_card, summaries_card
 from crs_products.card import COLUMN_DOCS, render
 from crs_products.pipeline import PROBE_KEY, new_manifest, probe_state
 from crs_products.store import COLUMNS
@@ -43,6 +45,28 @@ def test_a_partial_backfill_shows_the_share_stored_so_far(tmp_path):
     card = render(store.read_manifest())
     assert "**2 of 8 products** (25.0%)" in card and "Last complete sync:" not in card
     assert "| R | 2 | 2 | 8 | 0 of 1 |" in card
+
+
+@pytest.mark.parametrize("render_card", [render, summaries_card.render, constitution_card.render])
+def test_status_links_only_known_code_from_the_last_complete_sync(render_card):
+    sha = "1234567890abcdef" * 2 + "12345678"
+    url = "https://github.example/owner/repo/actions/runs/12"
+    commit = f"commit [{sha[:12]}](https://github.com/incrediblecrab/us-dataset-products/commit/{sha})"
+    actions = f"[Actions run]({url})"
+    listing = {"at": T1}
+    manifest = {"listing": listing, "runs": [{"finished": False, "stopped": "budget", "code": {"commit": "b" * 40, "run_url": url + "3"}}]}
+    for code, detail in (
+        (None, ""),
+        ({"commit": None, "run_url": None}, ""),
+        ({"commit": sha, "run_url": None}, f" ({commit})"),
+        ({"commit": None, "run_url": url}, f" ({actions})"),
+        ({"commit": sha, "run_url": url}, f" ({commit}, {actions})"),
+    ):
+        if code is not None:
+            listing["code"] = code
+        status = render_card(manifest).split("## Status\n", 1)[1].split("\n## ", 1)[0]
+        assert f"Last complete sync: {T1} UTC{detail}." in status.splitlines()
+        assert "b" * 40 not in status and url + "3" not in status
 
 
 def test_every_column_is_documented_in_the_schema_table():

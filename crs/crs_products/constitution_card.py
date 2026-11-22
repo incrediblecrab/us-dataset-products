@@ -1,6 +1,6 @@
 """Renders the Constitution Annotated dataset's card from its manifest alone, like card.py for the products."""
 
-from .card import GITHUB, citation_lines, size_category
+from .card import GITHUB, citation_lines, last_sync_lines, size_category
 from .constitution import REPO_ID, SCHEMA
 from .pipeline import MAX_ATTEMPTS, RETRY_AFTER_HOURS, TEXT_RETRY_HOURS
 
@@ -54,8 +54,7 @@ def render(manifest):
         lines.append(f"**{rows:,} of {count:,} units** ({rows / count:.1%}) as of {seen.get('at')} UTC, when GovInfo last listed {count:,}. {with_text:,} rows have text. {exhausted:,} units failed {MAX_ATTEMPTS} times and are retried every {RETRY_AFTER_HOURS} hours; their errors are in `manifest.json`.")
     else:
         lines.append("The first sync has not listed GovInfo yet.")
-    if listing.get("at"):
-        lines += ["", f"Last complete sync: {listing['at']} UTC."]
+    lines += last_sync_lines(listing)
     lines += ["", "| Package | Rows | With text | Listed | Complete |", "|---|---:|---:|---:|---|"]
     for key in sorted(entries):
         entry = entries[key]

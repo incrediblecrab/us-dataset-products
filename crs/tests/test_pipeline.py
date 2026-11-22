@@ -1,6 +1,7 @@
 """The sync loop against a scripted source and a local store."""
 
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
@@ -55,12 +56,49 @@ def test_every_commit_carries_the_manifest_and_the_card_rendered_from_it(tmp_pat
     assert store.read_text(CARD) == render(store.read_manifest())
 
 
-def test_idle_rerun_fetches_and_commits_nothing(tmp_path):
+def test_run_code_falls_back_to_the_source_checkout_without_actions_metadata(monkeypatch, tmp_path):
+    sha = "0123456789abcdef" * 2 + "01234567"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    for key in ("GITHUB_SHA", "GITHUB_SERVER_URL", "GITHUB_REPOSITORY", "GITHUB_RUN_ID"):
+        monkeypatch.delenv(key, raising=False)
+
+    def git(args, *, cwd, **kwargs):
+        assert args == ["git", "rev-parse", "HEAD"]
+        assert cwd in Path(pipeline.__file__).resolve().parents and cwd != tmp_path
+        return sha + "\n"
+
+    monkeypatch.setattr(pipeline.subprocess, "check_output", git)
+    assert pipeline.run_code() == {"commit": sha, "run_url": None}
+
+
+def test_run_code_without_git_or_a_run_id(monkeypatch):
+    monkeypatch.setenv("PATH", "")
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GITHUB_SERVER_URL", "https://github.example")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
+    monkeypatch.delenv("GITHUB_RUN_ID", raising=False)
+    monkeypatch.delenv("GITHUB_SHA", raising=False)
+    assert pipeline.run_code() == {"commit": None, "run_url": None}
+
+
+def test_idle_rerun_fetches_and_commits_nothing(tmp_path, monkeypatch):
+    sha = "a" * 40
+    monkeypatch.setenv("GITHUB_SHA", sha)
+    monkeypatch.setenv("GITHUB_SERVER_URL", "https://github.example")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
+    monkeypatch.setenv("GITHUB_RUN_ID", "12")
     store, state = local_store(tmp_path), scripted(units={"R40001": T1, "IN12001": T2})
     run_once(store, state)
+    manifest = store.read_manifest()
+    assert manifest["runs"][-1]["code"] == {"commit": sha, "run_url": "https://github.example/owner/repo/actions/runs/12"}
+    assert manifest["listing"]["code"] == manifest["runs"][-1]["code"]
     commits, fetched = len(store.commits), len(state.fetched)
+    monkeypatch.setenv("GITHUB_SHA", "b" * 40)
+    monkeypatch.setenv("GITHUB_RUN_ID", "13")
     run = run_once(store, state)
     assert run["finished"] and run["commits"] == 0
+    assert store.read_manifest() == manifest
     assert len(store.commits) == commits and len(state.fetched) == fetched
 
 

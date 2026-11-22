@@ -63,6 +63,12 @@ def test_a_synced_store_passes(synced):
     assert report["live"] == {"count": 4, "listed": 4, "on_hub": 4, "missing": 0, "missing_recorded_as_failed": 0, "extra": 0, "missing_sample": [], "extra_sample": []}
 
 
+def test_a_manifest_from_before_code_was_recorded_passes(synced):
+    store, _ = synced
+    edit_manifest(store, lambda m: (m["runs"][-1].pop("code"), m["listing"].pop("code")))
+    assert verify(store)["problems"] == []
+
+
 @pytest.mark.parametrize("plant", sorted(PLANTS))
 def test_each_planted_defect_is_named(synced, plant):
     store, _ = synced
@@ -187,9 +193,10 @@ def test_a_sync_on_a_duplicates_only_listing_finishes_and_keeps_the_displaced_pr
     assert verify(store)["problems"] == []
 
 
-def test_an_unreconciled_source_does_not_replace_the_last_complete_sync(synced):
+def test_an_unreconciled_source_does_not_replace_the_last_complete_sync(synced, monkeypatch):
     store, state = synced
     before = store.read_manifest()
+    monkeypatch.setenv("GITHUB_SHA", "b" * 40)
     state.count = 100
     state.units = {"R40001": T1}
     state.fetched.clear()
@@ -198,6 +205,7 @@ def test_an_unreconciled_source_does_not_replace_the_last_complete_sync(synced):
     assert result["finished"] is False and result["stopped"] == "incomplete listing"
     assert result["warnings"] and not state.fetched and not state.exists_asked
     assert after["listing"] == before["listing"] and after["partitions"] == before["partitions"]
+    assert after["runs"][-1]["code"]["commit"] == "b" * 40
     assert after["source_listing"]["complete"] is False
     assert "source listing incomplete" in store.read_text("README.md")
 

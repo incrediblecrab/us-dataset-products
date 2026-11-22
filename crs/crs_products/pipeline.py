@@ -11,10 +11,12 @@ import json
 import logging
 import os
 import re
+import subprocess
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from .http import Blocked, MissingKey, QuotaExhausted
 from .source import IncompleteListing, listing_problem, listing_summary
@@ -66,6 +68,17 @@ def writer_identity():
     return "github-actions" if os.environ.get("GITHUB_ACTIONS") == "true" else "local"
 
 
+def run_code():
+    sha = os.environ.get("GITHUB_SHA")
+    if not sha:
+        try:
+            sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=Path(__file__).resolve().parent, stderr=subprocess.DEVNULL, text=True).strip()
+        except (OSError, subprocess.CalledProcessError) as error:
+            log.debug("cannot read git HEAD: %s", error)
+    server, repo, run = (os.environ.get(key) for key in ("GITHUB_SERVER_URL", "GITHUB_REPOSITORY", "GITHUB_RUN_ID"))
+    return {"commit": sha if re.fullmatch(r"[0-9a-fA-F]{40}", sha or "") else None, "run_url": f"{server}/{repo}/actions/runs/{run}" if server and repo and run else None}
+
+
 @dataclass
 class Unit:
     id: str
@@ -108,6 +121,7 @@ class Context:
     pending: list = field(default_factory=list)
     last_commit: float = field(default_factory=time.monotonic)
     claimed: bool = False
+    code: dict = field(default_factory=run_code, init=False)
 
     def out_of_time(self):
         return time.monotonic() > self.deadline
@@ -273,7 +287,7 @@ def sync(ctx, source):
     except Exception as error:  # noqa: BLE001 - recorded in the run record; the probe backs off
         finished, reason = False, f"{type(error).__name__}: {error}"[:300]
         log.exception("run failed")
-    run = {"started": started, "ended": utcnow(), "writer": ctx.writer, "finished": finished, "stopped": reason}
+    run = {"started": started, "ended": utcnow(), "writer": ctx.writer, "code": ctx.code, "finished": finished, "stopped": reason}
     if warnings:
         run["warnings"] = warnings
     run.update({key: ctx.stats[key] for key in ("fetched", "unchanged", "failed", "removed", "suspect_listings")})
@@ -285,7 +299,7 @@ def sync(ctx, source):
     if finished and ctx.only is None and listing:
         old = base.get("listing") or {}
         changed = changed or any(listing[key] != old.get(key) for key in ("count", "newest", "listed", "partitions")) or age_hours(old.get("at")) > 23
-        manifest["listing"] = listing
+        manifest["listing"] = dict(listing, code=ctx.code)
     if ctx.store.staged or ctx.stats["commits"] or changed or reason not in CLEAN_STOPS or not runs or age_hours(runs[-1].get("ended")) > 23:
         manifest["runs"] = runs[-(RUNS_KEPT - 1):] + [dict(run, commits=ctx.stats["commits"] + 1)]
         try:

@@ -10,6 +10,8 @@ This folder builds and updates three public Hugging Face datasets of work by the
 
 **Inputs:** the [Congress.gov API](https://api.congress.gov) and the [GovInfo API](https://api.govinfo.gov), both with a free [api.data.gov](https://api.data.gov/signup/) key in `DATA_GOV_API_KEY`, and product PDFs and HTML on www.congress.gov.
 
+**Provenance:** New run records in `manifest.json` identify the pipeline commit (`code.commit`) and Actions run (`code.run_url`); either can be null. The last complete listing keeps its own copy, so its dataset card can still link to that run after it leaves the 20-run history.
+
 **Files:**
 
 - [`crs_products/`](crs_products/README.md): the pipeline package

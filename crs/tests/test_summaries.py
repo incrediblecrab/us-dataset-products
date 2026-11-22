@@ -208,11 +208,17 @@ def test_a_run_limited_to_some_slices_leaves_the_others_and_the_high_water_mark_
     assert store.read_manifest()["partitions"]["094-s"]["rows"] == 6
 
 
-def test_a_run_with_nothing_new_commits_nothing(tmp_path):
+def test_a_run_with_nothing_new_commits_nothing(tmp_path, monkeypatch):
+    monkeypatch.setenv("GITHUB_SHA", "a" * 40)
+    monkeypatch.delenv("GITHUB_RUN_ID", raising=False)
     api, store = backfilled(tmp_path, BASE)
     run(store, api)
+    manifest = store.read_manifest()
+    assert manifest["runs"][-1]["code"] == manifest["listing"]["code"] == {"commit": "a" * 40, "run_url": None}
+    monkeypatch.setenv("GITHUB_SHA", "b" * 40)
     record, _ = run(store, api)
     assert record["commits"] == 0 and record["fetched"] > 0 and record["unchanged"] == record["fetched"]
+    assert store.read_manifest() == manifest
 
 
 def test_a_summary_that_cannot_be_read_is_recorded_and_the_run_goes_on(tmp_path):

@@ -9,7 +9,8 @@ from .store import SCHEMA
 from .source import listing_problem
 from .verify import TOLERANCE_MIN
 
-GITHUB = "https://github.com/incrediblecrab/us-dataset-products/tree/main/crs"
+GITHUB_REPO = "https://github.com/incrediblecrab/us-dataset-products"
+GITHUB = f"{GITHUB_REPO}/tree/main/crs"
 REPO_ID = "incrediblecrab/us-crs-research-papers"
 COLUMN_DOCS = {
     "id": "CRS product number, for example R49359, IN12740 or 98-684",
@@ -31,6 +32,18 @@ COLUMN_DOCS = {
     "fetched_at": "When the fetch that wrote this row ran (UTC); a later fetch that found the product unchanged is not recorded",
 }
 
+
+def last_sync_lines(listing):
+    if not listing.get("at"):
+        return []
+    code = listing.get("code") or {}
+    links = []
+    if sha := code.get("commit"):
+        links.append(f"commit [{sha[:12]}]({GITHUB_REPO}/commit/{sha})")
+    if url := code.get("run_url"):
+        links.append(f"[Actions run]({url})")
+    detail = f" ({', '.join(links)})" if links else ""
+    return ["", f"Last complete sync: {listing['at']} UTC{detail}."]
 
 
 def citation_lines(repo_id, title):
@@ -84,8 +97,7 @@ def render(manifest):
         lines.append(f"**{rows:,} of {count:,} products** ({rows / count:.1%}) as of {seen.get('at')} UTC, when the API last listed {count:,}. {with_text:,} rows have text. {exhausted:,} products failed {MAX_ATTEMPTS} times and are retried every {RETRY_AFTER_HOURS} hours; their errors are in `manifest.json`.")
     else:
         lines.append("The first sync has not listed the API yet.")
-    if listing.get("at"):
-        lines += ["", f"Last complete sync: {listing['at']} UTC."]
+    lines += last_sync_lines(listing)
     source_listing = manifest.get("source_listing")
     if source_listing and (problem := listing_problem(source_listing)):
         lines += ["", f"**Degraded:** {problem}. No product rows were changed by this attempt; the last complete sync is retained."]

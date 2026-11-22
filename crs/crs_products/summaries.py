@@ -406,7 +406,7 @@ def sync(ctx, source):
     except Exception as error:  # noqa: BLE001 - recorded in the run record; the probe backs off
         finished, reason = False, f"{type(error).__name__}: {error}"[:300]
         log.exception("run failed")
-    record = {"started": started, "ended": utcnow(), "writer": ctx.writer, "finished": finished, "stopped": reason}
+    record = {"started": started, "ended": utcnow(), "writer": ctx.writer, "code": ctx.code, "finished": finished, "stopped": reason}
     record.update({key: ctx.stats[key] for key in ("fetched", "unchanged", "failed", "removed", "suspect_listings")})
     if reason == "superseded":
         return dict(record, commits=ctx.stats["commits"])
@@ -418,7 +418,7 @@ def sync(ctx, source):
                    "partitions": {key: entries[key].get("listed") for key in sorted(entries)}}
         old = base.get("listing") or {}
         changed = any(listing[key] != old.get(key) for key in ("count", "newest", "listed", "partitions")) or age_hours(old.get("at")) > 23 or manifest.get("reconciled_at") != base.get("reconciled_at")
-        manifest["listing"] = listing
+        manifest["listing"] = dict(listing, code=ctx.code)
     if ctx.store.staged or ctx.stats["commits"] or changed or manifest["failures"] != (base.get("failures") or {}) or reason not in CLEAN_STOPS or not runs or age_hours(runs[-1].get("ended")) > 23:
         manifest["runs"] = runs[-(RUNS_KEPT - 1):] + [dict(record, commits=ctx.stats["commits"] + 1)]
         try:
