@@ -115,6 +115,17 @@ def test_a_synced_store_passes(synced):
     assert (live["first"], live["newest"], live["sitemap_months_without_edition"]) == ("1971-06-02", "2026-03-04", [])
 
 
+def test_a_manifest_from_before_run_provenance_passes(synced):
+    store, _ = synced
+
+    def remove_code(manifest):
+        manifest["runs"][-1].pop("code")
+        manifest["listing"].pop("code")
+
+    edit_manifest(store, remove_code)
+    assert verify(store)["problems"] == []
+
+
 @pytest.mark.parametrize("plant", sorted(PLANTS))
 def test_each_planted_defect_is_named(synced, plant):
     store, _ = synced

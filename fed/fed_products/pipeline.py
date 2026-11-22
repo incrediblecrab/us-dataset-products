@@ -10,10 +10,12 @@ import hashlib
 import logging
 import os
 import re
+import subprocess
 import time
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 
 from .beige_book import REPLACEMENT_CHARACTER, comparable, unavailable, units_of
 from .board import LANDING, era_of
@@ -64,6 +66,21 @@ def age_hours(stamp):
 
 def writer_identity():
     return "github-actions" if os.environ.get("GITHUB_ACTIONS") == "true" else "local"
+
+
+def code_identity():
+    commit = os.environ.get("GITHUB_SHA")
+    if not commit:
+        try:
+            commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=Path(__file__).resolve().parent.parent, stderr=subprocess.DEVNULL, text=True).strip()
+        except (OSError, subprocess.CalledProcessError) as error:
+            log.debug("cannot identify the code commit: %s", error)
+            commit = None
+    if commit and not re.fullmatch(r"[0-9a-fA-F]{40}", commit):
+        log.warning("ignoring a code commit that is not a 40-digit SHA")
+        commit = None
+    server, repo, run_id = (os.environ.get(key) for key in ("GITHUB_SERVER_URL", "GITHUB_REPOSITORY", "GITHUB_RUN_ID"))
+    return {"commit": commit or None, "run_url": f"{server}/{repo}/actions/runs/{run_id}" if server and repo and run_id else None}
 
 
 @dataclass
@@ -228,6 +245,7 @@ def sync(ctx, source):
     if holder:
         log.info("deferring to %s, which wrote at %s", holder["by"], holder["at"])
         return {"started": started, "ended": utcnow(), "writer": ctx.writer, "finished": False, "stopped": "deferred", "holder": holder, "commits": 0}
+    code = code_identity()
     manifest = copy.deepcopy(base)
     manifest.setdefault("partitions", {})
     manifest.setdefault("failures", {})
@@ -256,7 +274,7 @@ def sync(ctx, source):
     except Exception as error:  # noqa: BLE001 - recorded in the run record; the probe backs off
         finished, reason = False, f"{type(error).__name__}: {error}"[:300]
         log.exception("run failed")
-    run = {"started": started, "ended": utcnow(), "writer": ctx.writer, "finished": finished, "stopped": reason}
+    run = {"started": started, "ended": utcnow(), "writer": ctx.writer, "code": code, "finished": finished, "stopped": reason}
     run.update({key: ctx.stats[key] for key in ("fetched", "unchanged", "rechecked", "rechecks_deferred", "failed", "removed", "unlisted_kept", "suspect_listings")})
     if reason == "superseded":
         return dict(run, commits=ctx.stats["commits"])
@@ -266,7 +284,7 @@ def sync(ctx, source):
     if finished and ctx.only is None and record:
         old = base.get("listing") or {}
         changed = any(record[key] != old.get(key) for key in ("head", "editions", "scheduled", "partitions")) or age_hours(old.get("at")) > LISTING_HOURS - 1
-        manifest["listing"] = record
+        manifest["listing"] = dict(record, code=code)
     if ctx.store.staged or ctx.stats["commits"] or changed or reason not in CLEAN_STOPS or not runs or age_hours(runs[-1].get("ended")) > 23:
         manifest["runs"] = runs[-(RUNS_KEPT - 1):] + [dict(run, commits=ctx.stats["commits"] + 1)]
         try:

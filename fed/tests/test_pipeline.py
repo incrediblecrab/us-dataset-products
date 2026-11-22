@@ -2,6 +2,7 @@
 
 import json
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 from huggingface_hub import DatasetCard
@@ -91,13 +92,47 @@ def test_every_commit_carries_the_manifest_and_the_card_rendered_from_it(tmp_pat
     assert store.read_text(CARD) == render(store.read_manifest())
 
 
-def test_idle_rerun_fetches_and_commits_nothing(tmp_path):
+def test_idle_rerun_fetches_and_commits_nothing_even_with_new_code(tmp_path, monkeypatch):
+    sha = "0123456789abcdef" * 2 + "01234567"
+    monkeypatch.setenv("GITHUB_SHA", sha)
+    monkeypatch.setenv("GITHUB_SERVER_URL", "https://git.example")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
+    monkeypatch.setenv("GITHUB_RUN_ID", "123")
     store, state = local_store(tmp_path), beige()
     run_once(store, state, today=TODAY)
+    manifest = store.read_manifest()
+    assert manifest["runs"][-1]["code"] == {"commit": sha, "run_url": "https://git.example/owner/repo/actions/runs/123"}
     commits, fetched = len(store.commits), len(state.fetched)
+    monkeypatch.setenv("GITHUB_SHA", "b" * 40)
+    monkeypatch.setenv("GITHUB_RUN_ID", "124")
     run = run_once(store, state, today=TODAY)
     assert run["finished"] and run["commits"] == 0
-    assert len(store.commits) == commits and len(state.fetched) == fetched
+    assert len(store.commits) == commits and len(state.fetched) == fetched and store.read_manifest() == manifest
+
+
+def test_missing_actions_metadata_uses_the_pipeline_checkout(tmp_path, monkeypatch):
+    sha = "a" * 40
+    folder = Path(__file__).resolve().parent.parent
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    for key in ("GITHUB_SHA", "GITHUB_SERVER_URL", "GITHUB_REPOSITORY", "GITHUB_RUN_ID"):
+        monkeypatch.delenv(key, raising=False)
+
+    def git(args, *, cwd, **kwargs):
+        assert args == ["git", "rev-parse", "HEAD"] and cwd == folder
+        return sha + "\n"
+
+    monkeypatch.setattr(pipeline.subprocess, "check_output", git)
+    assert pipeline.code_identity() == {"commit": sha, "run_url": None}
+
+
+def test_missing_git_and_partial_actions_metadata_leave_provenance_unknown(tmp_path, monkeypatch):
+    monkeypatch.setenv("PATH", str(tmp_path))
+    monkeypatch.delenv("GITHUB_SHA", raising=False)
+    monkeypatch.setenv("GITHUB_SERVER_URL", "https://github.com")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
+    monkeypatch.delenv("GITHUB_RUN_ID", raising=False)
+    assert pipeline.code_identity() == {"commit": None, "run_url": None}
 
 
 @pytest.mark.parametrize("hours_old, republished", [(pipeline.LISTING_HOURS - 1.5, False), (pipeline.LISTING_HOURS - 0.5, True)])

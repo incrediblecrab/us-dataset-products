@@ -8,7 +8,8 @@ from .beige_book import MINNEAPOLIS_RECHECK_DAYS, RECENT_DAYS, RECENT_RECHECK_DA
 from .pipeline import LEASE_MINUTES, LISTING_HOURS, MAX_ATTEMPTS, PROBE_KEY, RETRY_AFTER_HOURS, probe_state
 from .sections import DISTRICTS, STANDARD, rank
 
-GITHUB = "https://github.com/incrediblecrab/us-dataset-products/tree/main/fed"
+GITHUB_REPO = "https://github.com/incrediblecrab/us-dataset-products"
+GITHUB = f"{GITHUB_REPO}/tree/main/fed"
 # The workflow's cron (.github/workflows/fed-pipeline.yml at the repository root); a test holds the two equal.
 SCHEDULE = "37 12 * * *"
 BOARD_TERMS = "https://www.federalreserve.gov/disclaimer.htm"
@@ -100,7 +101,14 @@ def render(manifest):
         upcoming = seen.get("scheduled") or []
         lines += ["", f"At {seen['at']} UTC the Board's lists named {seen.get('editions') or 0:,} editions, the newest {spoken(seen.get('newest'))}. The next edition on the Board's schedule: {spoken(upcoming[0]) if upcoming else 'none listed'}."]
     if listing.get("at"):
-        lines += ["", f"Last complete sync: {listing['at']} UTC."]
+        code = listing.get("code") or {}
+        links = []
+        if commit := code.get("commit"):
+            links.append(f"commit [{commit[:12]}]({GITHUB_REPO}/commit/{commit})")
+        if url := code.get("run_url"):
+            links.append(f"[Actions run]({url})")
+        provenance = f" ({', '.join(links)})" if links else ""
+        lines += ["", f"Last complete sync: {listing['at']} UTC{provenance}."]
     if exhausted:
         named = ", ".join(exhausted[:10]) + (f" and {len(exhausted) - 10} more" if len(exhausted) > 10 else "")
         one = len(exhausted) == 1

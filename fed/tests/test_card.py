@@ -74,6 +74,37 @@ def test_a_synced_manifest_renders_its_numbers(tmp_path):
     assert "Every section has text" not in gaps and "units failed" not in card and "unit failed" not in card
 
 
+def test_a_later_partition_run_does_not_replace_the_last_complete_sync_links(tmp_path, monkeypatch):
+    sha = "0123456789" * 4
+    monkeypatch.setenv("GITHUB_SHA", sha)
+    monkeypatch.setenv("GITHUB_SERVER_URL", "https://github.com")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
+    monkeypatch.setenv("GITHUB_RUN_ID", "100")
+    store, state = local_store(tmp_path), beige()
+    run_once(store, state)
+    monkeypatch.setenv("GITHUB_SHA", "b" * 40)
+    monkeypatch.setenv("GITHUB_RUN_ID", "101")
+    state.board.append("2026-04-15")
+    run_once(store, state, only=frozenset({"2026"}))
+    manifest = store.read_manifest()
+    assert manifest["runs"][-1]["code"] == {"commit": "b" * 40, "run_url": "https://github.com/owner/repo/actions/runs/101"}
+    status = render(manifest).partition("## Status\n")[2].partition("## Use\n")[0]
+    assert f"commit [{sha[:12]}](https://github.com/incrediblecrab/us-dataset-products/commit/{sha})" in status
+    assert "[Actions run](https://github.com/owner/repo/actions/runs/100)" in status and "actions/runs/101" not in status
+
+
+def test_last_complete_sync_omits_unknown_links():
+    sha, url = "a" * 40, "https://github.com/owner/repo/actions/runs/100"
+    for fields, suffix in (
+        ({}, ""),
+        ({"code": {"commit": None, "run_url": None}}, ""),
+        ({"code": {"commit": None, "run_url": url}}, f" ([Actions run]({url}))"),
+        ({"code": {"commit": sha, "run_url": None}}, f" (commit [{sha[:12]}](https://github.com/incrediblecrab/us-dataset-products/commit/{sha}))"),
+    ):
+        card = render({"listing": {"at": T1, **fields}})
+        assert f"Last complete sync: {T1} UTC{suffix}." in card.splitlines()
+
+
 def test_gap_counts_agree_in_number(tmp_path):
     store, state = local_store(tmp_path), beige(gaps={"1971-06-02-atlanta", "1971-06-02-chicago", "1971-06-23-boston"})
     run_once(store, state)
