@@ -82,7 +82,7 @@ def test_the_card_names_every_gap(built):
     body = render(built.read_manifest())
     assert "This collection does not hold every file the listing links: the status below says what it holds and where the gaps are." in body and "Every document file" not in body
     assert "1 partition is not yet complete: OT2023." in body
-    assert "| [pdfs/gone.pdf](https://www.supremecourt.gov/pdfs/gone.pdf) | 1 | FetchFailed: HTTP 404 for https://www.supremecourt.gov/pdfs/gone.pdf |" in body
+    assert "| [pdfs/gone.pdf](https://www.supremecourt.gov/pdfs/gone.pdf) |  | gone.pdf | 1 | FetchFailed: HTTP 404 for https://www.supremecourt.gov/pdfs/gone.pdf |" in body
     assert "0 files have failed 3 times." in body
 
 
@@ -162,12 +162,51 @@ def test_a_partition_the_listing_gives_no_files_is_not_called_unreached(whole):
     assert f"OT19{FAILURES_SHOWN - 1:02d} ...." in render(manifest)
 
 
-def test_a_long_failure_list_is_cut_with_a_count_of_the_rest(built):
+def test_every_unstored_file_is_listed_by_partition_even_with_legacy_failures(built):
     manifest = built.read_manifest()
-    manifest["failures"] = {f"pdfs/{n:03d}.pdf": {"partition": "OT2023", "url": f"https://www.supremecourt.gov/pdfs/{n:03d}.pdf", "attempts": 3, "error": "FetchFailed: HTTP 404 | planted", "at": "2026-09-26T00:00:00Z"} for n in range(FAILURES_SHOWN + 5)}
+    ids = [f"pdfs/{n:03d}.pdf" for n in range(30)]
+    manifest["failures"] = {uid: {"partition": "OT2012" if n % 2 else "OT2013", "url": f"https://www.supremecourt.gov/{uid}", "attempts": 3, "error": "FetchFailed: HTTP 404 | planted", "at": "2026-09-26T00:00:00Z"} for n, uid in enumerate(ids)}
+    for key in ("OT2012", "OT2013"):
+        manifest["seen"]["partitions"][key] = 15
+        manifest["partitions"][key] = {"rows": 0, "complete": True, "ids": []}
+    manifest["failures"][ids[0]].update(docket="14-10186", title="Ben-Levi v. Brown", citation="577/2")
+    manifest["failures"][ids[1]].update(citation="577/3")
+    manifest["failures"][ids[2]].update(citation="576/1")
+    manifest["failures"][ids[3]].update(citation="580 U.S. 2")
     body = render(manifest)
-    assert body.count("| 3 | FetchFailed: HTTP 404 / planted |") == FAILURES_SHOWN, "a | in an error would break the table"
-    assert "| ... 5 more in `manifest.json` | | |" in body and f"{FAILURES_SHOWN + 5} files have failed 3 times." in body
+    summary = "OT2012 and OT2013 hold no rows: the Court's site answers HTTP 404 for every file their listing links."
+    assert body.index(summary) < body.index("#### OT2012: 15 files") < body.index("#### OT2013: 15 files")
+    assert body.index(f"[{ids[-1]}]") < body.index("#### OT2013: 15 files") < body.index(f"[{ids[0]}]")
+    assert all(body.count(f"[{uid}](https://www.supremecourt.gov/{uid})") == 1 for uid in ids)
+    assert body.count(r"| 3 | FetchFailed: HTTP 404 \| planted |") == 30 and "30 files have failed 3 times." in body
+    assert "| 14-10186 | Ben-Levi v. Brown | 3 |" in body and "|  |  | 3 |" in body
+    assert body.count("config of incrediblecrab/us-scotus-opinions holds the bound volumes the Court lists.") == 1
+    assert "The listing cites volumes 576 and 577 of the United States Reports;" in body and "577/2" not in body
+    assert "30 listed files not stored" in render_category("case-documents", {manifest["collection"]: manifest})
+
+    manifest["failures"][ids[0]]["error"] = "NotAPdf: not a PDF"
+    assert summary not in render(manifest) and "OT2012 and OT2013 hold no rows:" in render(manifest)
+    manifest["failures"][ids[0]].pop("citation")
+    for uid in ids[1:3]:
+        manifest["failures"][uid].pop("citation")
+    assert "The listing cites volume" not in render(manifest)
+
+
+def test_both_cards_show_only_the_last_complete_runs_known_links(whole, actions_code):
+    last = whole["listing"]
+    sha, url = actions_code["commit"], actions_code["run_url"]
+    commit = f"commit [{sha[:12]}](https://github.com/incrediblecrab/us-dataset-products/commit/{sha})"
+    actions = f"[Actions run]({url})"
+    whole["runs"].append({"finished": False, "code": {"commit": "f" * 40, "run_url": "https://example.org/newer"}})
+    for code in (actions_code, {"commit": sha, "run_url": None}, {"commit": None, "run_url": url}, {}):
+        if code:
+            last["code"] = code
+        else:
+            last.pop("code")
+        for body in (render(whole), render_category("case-documents", {whole["collection"]: whole})):
+            assert (commit in body) == bool(code.get("commit"))
+            assert (actions in body) == bool(code.get("run_url"))
+            assert "https://example.org/newer" not in body
 
 
 def test_a_stored_file_that_failed_again_is_not_called_unstored(built):

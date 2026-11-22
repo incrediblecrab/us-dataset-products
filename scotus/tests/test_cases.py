@@ -492,7 +492,7 @@ def world(tmp_path, monkeypatch):
     return SimpleNamespace(site=site, args=args, root=root, run=run, rows=rows, manifest=manifest)
 
 
-def test_run_builds_terms_then_leaves_them_until_due(world, capsys):
+def test_run_builds_terms_then_leaves_them_until_due(world, capsys, actions_code, monkeypatch):
     status, report = world.run(capsys)
     assert status == 0 and [t["term"] for t in report["terms"]] == ["OT2025", "OT2010"]
     current = world.rows(2025)
@@ -502,12 +502,19 @@ def test_run_builds_terms_then_leaves_them_until_due(world, capsys):
     assert json.loads(current["25-1"]["transcripts"])[0]["text"] == "transcript of Skinner v. Louisiana"
     entry = world.manifest()["terms"]["OT2010"]
     assert entry["complete"] is True and entry["docket_found"] == 2 and entry["dockets"]["10-1"]["tried"] == [OLD + "10-1.htm"]
+    manifest = world.manifest()
+    assert [r["code"] for r in manifest["runs"]] == [actions_code, actions_code]
+    sha = actions_code["commit"]
+    assert f"Last complete run: commit [{sha[:12]}](https://github.com/incrediblecrab/us-dataset-products/commit/{sha}), [Actions run]({actions_code['run_url']})." in (world.root / "README.md").read_text()
     assert cases.cmd_verify(world.args) == 0
     capsys.readouterr()
 
     asked = len(world.site.calls)
+    monkeypatch.setenv("GITHUB_SHA", "b" * 40)
+    monkeypatch.setenv("GITHUB_RUN_ID", "43")
+    monkeypatch.setattr(cases.LocalStore, "commit", lambda *_: pytest.fail("an unchanged run must not commit"))
     status, report = world.run(capsys)
-    assert status == 0 and report["terms"] == [] and len(world.site.calls) == asked
+    assert status == 0 and report["terms"] == [] and len(world.site.calls) == asked and world.manifest() == manifest
 
 
 def test_budget_stop_keeps_what_it_has_and_the_next_run_finishes(world, capsys, monkeypatch):
@@ -519,6 +526,7 @@ def test_budget_stop_keeps_what_it_has_and_the_next_run_finishes(world, capsys, 
     rows = world.rows(2025)
     assert rows["141, Orig."]["docket_found"] is True and rows["25-1"]["docket_fetched_at"] is None and rows["25-1"]["docket_found"] is None
     assert world.manifest()["terms"]["OT2025"]["complete"] is False
+    assert "Last complete run:" not in (world.root / "README.md").read_text()
     assert cases.cmd_verify(world.args) == 0
     capsys.readouterr()
 
@@ -532,8 +540,9 @@ def test_budget_stop_keeps_what_it_has_and_the_next_run_finishes(world, capsys, 
     assert world.manifest()["terms"]["OT2025"]["complete"] is True and world.rows(2025)["25-1"]["docket_found"] is True
 
 
-def test_rechecks_revalidate_and_a_refusal_keeps_the_stored_pages(world, capsys, monkeypatch):
+def test_rechecks_revalidate_and_a_refusal_keeps_the_stored_pages(world, capsys, monkeypatch, actions_code):
     world.run(capsys)
+    monkeypatch.setenv("GITHUB_RUN_ID", "43")
     before = world.rows(2025)
     monkeypatch.setattr(cases, "CURRENT_RECHECK", timedelta(0))
 
@@ -555,6 +564,8 @@ def test_rechecks_revalidate_and_a_refusal_keeps_the_stored_pages(world, capsys,
     refused = world.rows(2025)
     assert {docket: row["docket_html"] for docket, row in refused.items()} == {docket: row["docket_html"] for docket, row in before.items()}
     assert all(row["docket_found"] for row in refused.values())
+    assert world.manifest()["runs"][0]["code"]["run_url"].endswith("/43")
+    assert actions_code["run_url"] in (world.root / "README.md").read_text() and "/runs/43" not in (world.root / "README.md").read_text()
     assert cases.cmd_verify(world.args) == 0
 
 
@@ -612,7 +623,13 @@ def test_verify_names_what_does_not_match(world, capsys):
         status = cases.cmd_verify(world.args)
         return status, json.loads(capsys.readouterr().out)["problems"]
 
-    assert verify(lambda m: None) == (0, [])
+    def legacy(manifest):
+        del manifest["last_complete_code"]
+        for run in manifest["runs"]:
+            del run["code"]
+
+    assert verify(legacy) == (0, [])
+    assert "Last complete run:" not in (world.root / "README.md").read_text()
     status, problems = verify(lambda m: m["terms"]["OT2010"]["dockets"].pop("10-2"))
     assert status == 1 and problems == ["OT2010: rows with a docket page the manifest does not list: ['10-2']"]
     status, problems = verify(lambda m: m["terms"]["OT2010"]["dockets"].update({"10-9": {}}))

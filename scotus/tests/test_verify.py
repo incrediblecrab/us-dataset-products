@@ -190,6 +190,8 @@ def test_files_that_failed_every_attempt_are_reported_apart(dataset):
     dead = [unit(f"opinions/15pdf/dead-{n}.pdf") for n in range(TOLERANCE + 1)]
     manifest_path = root / "manifest.json"
     manifest = __import__("json").loads(manifest_path.read_text())
+    del manifest["runs"][-1]["code"]
+    del manifest["listing"]["code"]
     for u in dead:
         manifest["failures"][u.id] = {"partition": "OT2023", "url": u.url, "attempts": MAX_ATTEMPTS, "error": "FetchFailed: HTTP 404", "at": "2026-09-26T00:00:00Z"}
     manifest["listing"]["partitions"]["OT2023"] += len(dead)

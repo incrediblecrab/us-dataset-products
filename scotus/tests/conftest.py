@@ -13,6 +13,14 @@ FIXTURES = Path(__file__).parent / "fixtures"
 BASE = "https://www.supremecourt.gov/"
 
 
+@pytest.fixture
+def actions_code(monkeypatch):
+    sha, server, repo = "a1b2c3d4" * 5, "https://github.example", "owner/repo"
+    for key, value in (("GITHUB_SHA", sha), ("GITHUB_SERVER_URL", server), ("GITHUB_REPOSITORY", repo), ("GITHUB_RUN_ID", "42")):
+        monkeypatch.setenv(key, value)
+    return {"commit": sha, "run_url": f"{server}/{repo}/actions/runs/42"}
+
+
 @pytest.fixture(autouse=True)
 def no_token_exchange(monkeypatch):
     """The suite also runs on GitHub Actions, where trusted_publishing would trade a real OIDC id token; no test may reach GitHub or the Hub for one. HF_OIDC_RESOURCE is cleared for every test and removed after it, since trusted_publishing sets it in os.environ itself and monkeypatch.delenv records nothing for a variable that is absent; with it unset, huggingface_hub's own token lookup does not trade either."""

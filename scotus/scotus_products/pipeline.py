@@ -27,6 +27,7 @@ from datetime import date, datetime, timedelta, timezone
 
 from .extract import extract_audio, extract_html, extract_pdf, extract_video
 from .http import Blocked, QuotaExhausted
+from .provenance import run_code
 from .sources import ListingError, current_term
 from .store import Superseded, dumps
 
@@ -267,8 +268,9 @@ def sync(ctx, listing):
     if reason == "superseded":
         return dict(run, commits=ctx.stats["commits"])
     # The listing is published only by a run that brought every partition up to date with it.
+    run["code"] = run_code()
     if finished and ctx.only is None and record and not held:
-        manifest["listing"] = record
+        manifest["listing"] = dict(record, code=run["code"])
     manifest["runs"] = (base.get("runs") or [])[-(RUNS_KEPT - 1):] + [dict(run, commits=ctx.stats["commits"] + 1)]
     try:
         flush(ctx, manifest)
@@ -429,7 +431,17 @@ def sync_partition(ctx, pool, manifest, key, units, keep_listed=False):
     def fail(unit, error):
         previous = failures.get(unit.id) or {}
         attempts = previous.get("attempts", 0) + 1
-        failures[unit.id] = {"partition": key, "url": unit.url, "attempts": attempts, "error": f"{type(error).__name__}: {error}"[:300], "at": utcnow()}
+        try:
+            # The listing's own fields, so the card can name the case of a file it could not store.
+            described = ctx.collection.typed(unit, ctx.today)
+        except Exception as problem:  # noqa: BLE001 - a row the typed fields cannot read must not stop the run
+            log.warning("%s: listing fields unreadable: %s", unit.id, problem)
+            described = {}
+        failure = {**described, "partition": key, "url": unit.url, "attempts": attempts, "error": f"{type(error).__name__}: {error}"[:300], "at": utcnow()}
+        row = unit.entries[0].get("row") or {}
+        if "Citation" in row:
+            failure["citation"] = row["Citation"]
+        failures[unit.id] = failure
         counts["failed"] += 1
         done.add(unit.id)
         log.info("%s failed (attempt %d): %s", unit.id, attempts, error)

@@ -2,13 +2,15 @@
 
 import json
 import time
+from pathlib import Path
 
 import pytest
 
 from conftest import BASE, FakeListing, FakeSite, collection, pdf_bytes, sha256, unit
+from scotus_products import provenance
 from scotus_products.extract import extract_pdf
 from scotus_products.pipeline import MAX_ATTEMPTS, Context, codepoints, held_pages, sync
-from scotus_products.sources import ListingError, Unit
+from scotus_products.sources import COLLECTIONS, ListingError, Unit
 from scotus_products.store import LocalStore
 
 
@@ -51,12 +53,39 @@ def test_first_run_stores_every_file_with_its_bytes_and_text(tmp_path, two_files
     assert manifest["listing"]["count"] == 2
 
 
-def test_second_run_fetches_nothing(tmp_path, two_files):
+def test_second_run_fetches_nothing_and_names_the_code_that_ran(tmp_path, two_files, actions_code, monkeypatch):
     units, site = two_files
-    run(tmp_path, FakeListing(units), site)
+    _, store = run(tmp_path, FakeListing(units), site)
+    manifest = store.read_manifest()
+    assert manifest["runs"][-1]["code"] == actions_code and manifest["listing"]["code"] == actions_code
+    monkeypatch.setenv("GITHUB_SHA", "f" * 40)
+    monkeypatch.setenv("GITHUB_RUN_ID", "43")
     before = len(site.gets)
-    record, _ = run(tmp_path, FakeListing(units), site)
+    record, store = run(tmp_path, FakeListing(units), site)
     assert len(site.gets) == before and record["fetched"] == 0
+    manifest = store.read_manifest()
+    assert manifest["runs"][-1]["code"]["commit"] == "f" * 40 and manifest["listing"]["code"]["run_url"].endswith("/runs/43"), "the last complete run names the code that checked the listing"
+
+
+@pytest.mark.parametrize("missing", ["GITHUB_SERVER_URL", "GITHUB_REPOSITORY", "GITHUB_RUN_ID"])
+def test_run_code_without_a_sha_reads_the_checkout(missing, actions_code, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.delenv("GITHUB_SHA")
+    monkeypatch.delenv(missing)
+
+    def rev_parse(command, *, cwd, **kwargs):
+        assert command == ["git", "rev-parse", "HEAD"] and Path(cwd) == Path(provenance.__file__).resolve().parent
+        return "b" * 40 + "\n"
+
+    monkeypatch.setattr(provenance.subprocess, "check_output", rev_parse)
+    assert provenance.run_code() == {"commit": "b" * 40, "run_url": None}
+
+
+def test_run_code_without_git(actions_code, monkeypatch):
+    monkeypatch.delenv("GITHUB_SHA")
+    monkeypatch.setenv("PATH", "")
+    assert provenance.run_code() == {**actions_code, "commit": None}
 
 
 def test_a_file_the_listing_drops_is_kept_and_marked_then_restored(tmp_path, two_files):
@@ -94,14 +123,16 @@ def test_a_stored_file_stays_in_its_partition(tmp_path, two_files):
 
 def test_a_missing_file_is_recorded_as_failed_and_retried(tmp_path, two_files):
     units, site = two_files
-    dead = unit("opinions/15pdf/14-10186_k53l.pdf")
+    opinions = COLLECTIONS["opinions-relating-to-orders"]
+    dead = unit("opinions/15pdf/14-10186_k53l.pdf", partition="OT2015", term=2015, link_text="Ben-Levi v. Brown", row={"Docket": "14-10186", "Date": "2/29/16", "Citation": "577/2"})
     for attempt in range(1, MAX_ATTEMPTS + 1):
-        record, store = run(tmp_path, FakeListing(units + [dead]), site)
+        record, store = run(tmp_path, FakeListing(units + [dead]), site, collection=opinions)
         failure = store.read_manifest()["failures"][dead.id]
         assert failure["attempts"] == attempt and "404" in failure["error"]
-        assert store.read_manifest()["partitions"]["OT2023"]["complete"] is (attempt == MAX_ATTEMPTS)
+        assert {k: failure[k] for k in ("term", "date", "docket", "title", "citation")} == {"term": 2015, "date": "2016-02-29", "docket": "14-10186", "title": "Ben-Levi v. Brown", "citation": "577/2"}
+        assert store.read_manifest()["partitions"]["OT2015"]["complete"] is (attempt == MAX_ATTEMPTS)
     gets = site.gets.count(dead.url)
-    run(tmp_path, FakeListing(units + [dead]), site)
+    run(tmp_path, FakeListing(units + [dead]), site, collection=opinions)
     assert site.gets.count(dead.url) == gets, "a file that failed MAX_ATTEMPTS times waits RETRY_AFTER_HOURS"
 
 
@@ -310,6 +341,7 @@ def test_max_units_leaves_the_partition_incomplete(tmp_path, two_files):
     units, site = two_files
     record, store = run(tmp_path, FakeListing(units), site, max_units=1)
     assert record["added"] == 1 and store.read_manifest()["partitions"]["OT2023"]["complete"] is False
+    assert "code" in store.read_manifest()["runs"][-1]
 
 
 def test_low_disk_stops_before_downloading(tmp_path, two_files):

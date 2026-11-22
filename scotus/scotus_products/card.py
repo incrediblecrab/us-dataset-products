@@ -1,8 +1,10 @@
 """Renders a collection's card ({collection}/README.md in its category's repo) from its manifest alone, and the category's card (the repo's README.md, the one the Hub shows) from the manifests of its collections, so both are staged with every manifest commit and never disagree with it."""
 
-from collections import Counter
+import re
+from collections import Counter, defaultdict
 
 from .pipeline import MAX_ATTEMPTS, RETRY_AFTER_HOURS
+from .provenance import code_links
 from .sources import CATEGORIES, COLLECTIONS, repo_id as category_repo
 from .store import SCHEMA
 
@@ -91,6 +93,39 @@ def agree(n):
 FAILURES_SHOWN = 25
 
 
+def joined(items):
+    return ", ".join(items[:-1]) + " and " + items[-1] if len(items) > 1 else items[0]
+
+
+def table_cell(text):
+    return " ".join((text or "").splitlines()).replace("|", r"\|")
+
+
+def missing_lines(missing, entries, seen):
+    groups = defaultdict(list)
+    for uid, failure in sorted(missing.items()):
+        groups[failure["partition"]].append((uid, failure))
+    linked = seen.get("partitions") or {}
+    # Only partitions with unstored files: a partition no run has reached yet has its own sentence.
+    empty = sorted(key for key in groups if linked.get(key) and not entries.get(key, {}).get("rows"))
+    n = sum(f["attempts"] >= MAX_ATTEMPTS for f in missing.values())
+    lines = ["", "### Files not stored", "", f"The listing links these files, but fetching or reading them failed. A file is tried on every run until it has failed {MAX_ATTEMPTS} times, then once every {RETRY_AFTER_HOURS} hours. {count(n, 'file')} {'has' if n == 1 else 'have'} failed {MAX_ATTEMPTS} times."]
+    if empty:
+        single = len(empty) == 1
+        reason = "the listing links files but none is stored"
+        if all(len(groups.get(key, ())) == linked.get(key) and all(re.match(r"(?:FetchFailed: )?HTTP 404\b", f["error"]) for _, f in groups[key]) for key in empty):
+            reason = f"the Court's site answers HTTP 404 for every file {'its' if single else 'their'} listing links"
+        lines += ["", f"{joined(empty)} {'holds' if single else 'hold'} no rows: {reason}."]
+    volumes = sorted({int(m[1]) for f in missing.values() if (m := re.match(r"([0-9]+)/", f.get("citation") or ""))})
+    if volumes:
+        lines += ["", f"The listing cites {'volume' if len(volumes) == 1 else 'volumes'} {joined(list(map(str, volumes)))} of the United States Reports; the `us-reports` config of incrediblecrab/us-scotus-opinions holds the bound volumes the Court lists."]
+    for key, files in sorted(groups.items()):
+        lines += ["", f"#### {key}: {count(len(files), 'file')}", "", "| File | Docket | Title | Attempts | Last error |", "|---|---|---|---:|---|"]
+        for uid, f in files:
+            lines.append(f"| [{table_cell(uid)}]({f['url']}) | {table_cell(f.get('docket'))} | {table_cell(f.get('title'))} | {f['attempts']} | {table_cell(f['error'])} |")
+    return lines
+
+
 def codepoint_counts(points, uncounted):
     if uncounted:
         return f"These characters are not yet counted in {count(uncounted, 'partition')}, whose summary a run wrote before the pipeline counted them."
@@ -128,7 +163,7 @@ def render(manifest):
     manifest = manifest or {}
     collection = COLLECTIONS[manifest["collection"]]
     held = status(manifest)
-    entries, failures, listing, seen, missing, stale = (held[key] for key in ("entries", "failures", "listing", "seen", "missing", "stale"))
+    entries, listing, seen, missing, stale = (held[key] for key in ("entries", "listing", "seen", "missing", "stale"))
     rows, listed, delisted, file_bytes, pages = (held[key] for key in ("rows", "listed", "delisted", "file_bytes", "pages"))
     sources = Counter()
     xcheck = Counter()
@@ -144,7 +179,6 @@ def render(manifest):
         for key in ("checked", "equal", "equal_nfkd"):
             xcheck[key] += (entry.get("xcheck") or {}).get(key) or 0
         max_delta = max(max_delta, (entry.get("xcheck") or {}).get("max_delta") or 0)
-    unstored = {uid: f for uid, f in missing.items() if f["attempts"] >= MAX_ATTEMPTS}
     repo_id = collection.repo_id
     lines = ["---", f"pretty_name: \"Supreme Court of the United States: {collection.title}\"", *license_lines(collection.name in LICENSE), "language:", "- en",
              *TAGS, "size_categories:", f"- {size_category(rows)}"]
@@ -175,7 +209,8 @@ def render(manifest):
     else:
         lines.append("The first run has not read the listing yet.")
     if listing.get("at"):
-        lines += ["", f"Last complete run: {listing['at']}."]
+        links = code_links(listing.get("code"))
+        lines += ["", f"Last complete run: {listing['at']}{'; ' + links if links else ''}."]
     else:
         lines += ["", "No run has yet brought every partition up to date with the listing."]
     if held["held_pages"]:
@@ -187,13 +222,7 @@ def render(manifest):
         files = sum(seen["partitions"][key] for key in unreached)
         lines += ["", f"The listing of {seen.get('at')} links {count(files, 'file')} in {count(len(unreached), 'partition')} that no run has reached yet, so {'it holds' if len(unreached) == 1 else 'they hold'} no rows: {', '.join(unreached[:FAILURES_SHOWN])}{' ...' if len(unreached) > FAILURES_SHOWN else ''}."]
     if missing:
-        lines += ["", f"### Files not stored", "",
-                  f"The listing links these files, but fetching or reading them failed. A file is tried on every run until it has failed {MAX_ATTEMPTS} times, then once every {RETRY_AFTER_HOURS} hours. {count(len(unstored), 'file')} {'has' if len(unstored) == 1 else 'have'} failed {MAX_ATTEMPTS} times.", "",
-                  "| File | Attempts | Last error |", "|---|---:|---|"]
-        for uid, failure in sorted(missing.items())[:FAILURES_SHOWN]:
-            lines.append(f"| [{uid}]({failure['url']}) | {failure['attempts']} | {failure['error'].replace('|', '/')} |")
-        if len(missing) > FAILURES_SHOWN:
-            lines.append(f"| ... {len(missing) - FAILURES_SHOWN:,} more in `manifest.json` | | |")
+        lines += missing_lines(missing, entries, seen)
     if stale:
         lines += ["", f"The last attempt to fetch {count(len(stale), 'stored file')} again failed, so {'its row holds' if len(stale) == 1 else 'their rows hold'} the version fetched earlier: {', '.join(stale[:FAILURES_SHOWN])}{' ...' if len(stale) > FAILURES_SHOWN else ''}. The errors are in `manifest.json`."]
     lines += ["", "| Text source | Rows |", "|---|---:|"]
@@ -295,7 +324,10 @@ def render_category(category, manifests):
         if h["missing"]:
             gaps.append(f"{count(len(h['missing']), 'listed file')} not stored")
         state = "every listed file" if h["whole"] else "; ".join(gaps) or "not every listed file"
-        lines.append(f"| {name} | {h['rows']:,} | {gigabytes(h['file_bytes'])} | {h['listed']:,} of {h['seen']['count']:,} | {h['listing'].get('at') or 'none yet'} | [{collection.title}]({collection.source_page}): {state} |")
+        last = h["listing"].get("at") or "none yet"
+        if links := code_links(h["listing"].get("code")):
+            last += "; " + links
+        lines.append(f"| {name} | {h['rows']:,} | {gigabytes(h['file_bytes'])} | {h['listed']:,} of {h['seen']['count']:,} | {last} | [{collection.title}]({collection.source_page}): {state} |")
     first = present[0] if present else members[0].name
     lines += [
         "",

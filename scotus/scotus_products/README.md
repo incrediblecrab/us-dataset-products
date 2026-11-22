@@ -14,6 +14,7 @@ The pipeline package, run as `python -m scotus_products {list,run,verify,card,su
 - `extract.py`: `pdftotext -raw`, the scanned-page test, the pypdf cross-check, HTML text, and the checks that an MP3 is audio and an MP4 is video (neither gets text).
 - `http.py`: pacing, the robots.txt guard, bounded retries, no redirects.
 - `pipeline.py`: the sync loop, failures and retries, delisted files, the writer lease, the free-disk floor.
+- `provenance.py`: the source commit and Actions run recorded in each new manifest run and linked from the cards for the last complete run. A change of code or run URL alone does not publish a commit.
 - `store.py`: the schema, Parquet partitions, and the local and Hub stores, which keep each collection under its own directory of its category's repo; `hub_read` retries every Hub read as a commit is retried, and `cases.py` reads the source datasets through it too.
 - `card.py`: the collection's card, rendered from its manifest, and the category's card (the repo's README.md, one config per collection), rendered from all of them.
 - `verify.py`: the checks behind `verify`, among them that each partition file has the schema's columns, which the dataset viewer needs.
