@@ -52,7 +52,7 @@ FIELDS = ("list_row", "list", "entry", "name", "previous_entry")
 
 
 def latest(fetcher, limit=10):
-    """Recognized-Tribes notices from newest to oldest according to the live Federal Register API; used only to fail a scheduled run when a person must review a new notice before the pins move."""
+    """Recognized-Tribes notices from newest to oldest according to the live Federal Register API; used to flag new notices for review before the pins move."""
     query = urlencode({"conditions[term]": TITLE, "conditions[agencies][]": "indian-affairs-bureau", "order": "newest", "per_page": str(limit)})
     data = json.loads(fetcher.get(f"{LATEST_API}?{query}"))
     notices = []

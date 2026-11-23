@@ -1,4 +1,4 @@
-# At 12:37 UTC, which GitHub has been starting about four hours late, near 17:00 UTC (12:00 EST, 13:00 EDT), probe: New York filing counts by year, the two FEMA file hashes, and the dataset card render. When the probe says only the card render changed, the workflow commits the card alone; otherwise a needed sync harvests New York and FEMA (when fema.gov refuses the runner, it reuses the FEMA files the last build stored, once they match the manifest), builds all tables from reviewed pins, commits only if the manifest and card changed, and verifies what was published. The pin check runs after any publishable update, so a newer LOCUS or BIA release fails loudly without blocking daily New York/FEMA updates that can still be built from the reviewed pins.
+# At 12:37 UTC, which GitHub has been starting about four hours late, near 17:00 UTC (12:00 EST, 13:00 EDT), probe: New York filing counts by year, the two FEMA file hashes, and the dataset card render. When the probe says only the card render changed, the workflow commits the card alone; otherwise a needed sync harvests New York and FEMA (when fema.gov refuses the runner, it reuses the FEMA files the last build stored, once they match the manifest), builds all tables from reviewed pins, commits only if the manifest and card changed, and verifies what was published. After any publishable update, the pin check opens one GitHub issue per new LOCUS or BIA release and passes with a warning linking to the open issue. The run fails if the check cannot finish or the issue cannot be looked up or filed.
 # Writes to Hugging Face use Trusted Publishing: with `id-token: write`, the CLI sets HF_OIDC_RESOURCE from its --repo before creating a writing HfApi, so no Hugging Face token is stored anywhere. The workflow uses no secret.
 name: local-laws-pipeline
 
@@ -30,6 +30,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
+      issues: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
@@ -65,9 +66,34 @@ jobs:
           python -m local_laws verify | tee verify.json
       - name: Check reviewed source pins
         if: ${{ !inputs.args && !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          set -o pipefail
-          python -m local_laws check-pins | tee pins.json
+          set -euo pipefail
+          status=0
+          python -m local_laws check-pins > pins.json || status=$?
+          cat pins.json
+          if [ "$status" -ne 3 ]; then exit "$status"; fi
+
+          jq -ce '.review[]' pins.json | while IFS= read -r item; do
+            title=$(jq -er '.title' <<< "$item")
+            # An exact title match over the open issues: search syntax would read "local-laws:" as a qualifier.
+            url=$(gh issue list --state open --limit 500 --json title,url |
+              jq -r --arg title "$title" 'map(select(.title == $title))[0].url // empty')
+            if [ -z "$url" ]; then
+              source=$(jq -er '.source' <<< "$item")
+              case "$source" in
+                locus) module=locus ;;
+                bia_notices) module=tribes ;;
+                *) echo "::error::Unknown pin source: $source"; exit 1 ;;
+              esac
+              problem=$(jq -er --arg source "$source" '.problems[$source]' pins.json)
+              printf -v body '%s\n\nRun: %s\n\nclose this issue after updating the pin in local_laws/%s.py' "$problem" "$RUN_URL" "$module"
+              url=$(gh issue create --title "$title" --body "$body")
+            fi
+            echo "::warning::$title: $url"
+          done
       - name: Check FEMA freshness
         if: ${{ !inputs.args && !cancelled() }}
         run: |

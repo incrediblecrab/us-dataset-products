@@ -14,6 +14,7 @@ REPO = Path(__file__).resolve().parents[1]
 IGNORE = shutil.ignore_patterns("__pycache__")
 # (module, what the mutation breaks, code to replace, replacement). Each code string must occur exactly once in its module.
 MUTATIONS = [
+    ("cli.py", "check-pins: newer release exits successfully", "return REVIEW if review else 0", "return 0"),
     ("nfip.py", "freshness: overdue readings never alert", "elif age >= MAX_UNVERIFIED_HOURS:", "elif False:"),
     ("nfip.py", "freshness: exact age limit is allowed", "elif age >= MAX_UNVERIFIED_HOURS:", "elif age > MAX_UNVERIFIED_HOURS:"),
     ("nfip.py", "freshness: newer reading hides stale peer", "age = max(ages) if len(ages) == len(readings) else None", "age = min(ages) if len(ages) == len(readings) else None"),

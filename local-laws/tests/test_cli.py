@@ -277,20 +277,39 @@ def test_reads_do_not_request_an_oidc_token_in_github_actions(monkeypatch):
     assert seen == {"token": False, "create": False, "oidc": None}
 
 
-def test_check_pins_fails_loudly_when_a_person_must_review_a_new_notice(offline, monkeypatch, capsys):
-    monkeypatch.setattr(tribes, "latest", lambda fetcher: [{"document_number": "2027-00001", "published": "2027-01-30"}, {"document_number": tribes.NOTICE["document_number"], "published": tribes.NOTICE["published"]}])
-    monkeypatch.setattr(locus, "latest", lambda: {"repo_id": locus.REPO_ID, "sha": locus.REVISION, "pinned": locus.REVISION})
+@pytest.mark.parametrize("new_locus, new_bia", [(False, False), (True, False), (False, True), (True, True)])
+def test_check_pins_reports_one_review_per_new_release(offline, monkeypatch, capsys, new_locus, new_bia):
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    pinned = [tribes.NOTICE["document_number"], tribes.PREVIOUS["document_number"]]
+    numbers = ["2027-00001", pinned[0]] if new_bia else pinned
+    sha = "1234567890abcdef1234567890abcdef12345678" if new_locus else locus.REVISION
+    notices = [{"document_number": number} for number in numbers]
+    monkeypatch.setattr(tribes, "latest", lambda fetcher: notices)
+    monkeypatch.setattr(locus, "latest", lambda: {"repo_id": locus.REPO_ID, "sha": sha, "pinned": locus.REVISION})
+
+    assert run("check-pins", "--local", "unused") == (3 if new_locus or new_bia else 0)
+    out, err = capsys.readouterr()
+    report = json.loads(out)
+    assert report["bia_notices"] == notices and report["locus"]["sha"] == sha
+    expected = []
+    if new_bia:
+        expected.append({"source": "bia_notices", "pinned": pinned, "latest": numbers, "title": f"local-laws: review BIA notices 2027-00001, {pinned[0]}"})
+        assert "::warning::Federal Register has newer BIA recognized-Tribes notices" in err
+    if new_locus:
+        expected.append({"source": "locus", "pinned": locus.REVISION, "latest": sha, "title": "local-laws: review LOCUS-v1 1234567890ab"})
+        assert "::warning::LOCUS-v1 latest revision" in err
+    assert report["review"] == expected
+    assert err.splitlines() == [f"::warning::{report['problems'][item['source']]}" for item in expected]
+
+
+def test_check_pins_fails_if_it_cannot_finish(offline, monkeypatch, capsys):
+    def unavailable(fetcher):
+        raise Unavailable("Federal Register offline")
+
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setattr(tribes, "latest", unavailable)
     assert run("check-pins", "--local", "unused") == 1
-    output = capsys.readouterr().out
-    assert "Federal Register has newer BIA recognized-Tribes notices" in output
-    assert "review the new notice" in output
-
-
-def test_check_pins_accepts_the_current_pins(offline, monkeypatch, capsys):
-    monkeypatch.setattr(tribes, "latest", lambda fetcher: [{"document_number": tribes.NOTICE["document_number"], "published": tribes.NOTICE["published"]}, {"document_number": tribes.PREVIOUS["document_number"], "published": tribes.PREVIOUS["published"]}])
-    monkeypatch.setattr(locus, "latest", lambda: {"repo_id": locus.REPO_ID, "sha": locus.REVISION, "pinned": locus.REVISION})
-    assert run("check-pins", "--local", "unused") == 0
-    assert "bia_notices" in capsys.readouterr().out
+    assert "::error::pin check could not finish: Unavailable: Federal Register offline" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("hours, status, code", [(1, "unverified", 0), (nfip.MAX_UNVERIFIED_HOURS, "stale", 1)])
@@ -335,11 +354,23 @@ def test_check_freshness_cannot_succeed_without_a_published_reading(tmp_path, of
     assert report["status"] == "unknown" and report["problems"]
 
 
-def test_freshness_runs_after_publishing_even_if_an_earlier_check_failed():
+def test_workflow_handles_pin_reviews_and_checks_freshness_even_after_failure():
     workflow = yaml.safe_load((Path(__file__).resolve().parents[2] / ".github/workflows/local-laws-pipeline.yml").read_text())
+    assert workflow["permissions"] == {}
+    assert {name: job["permissions"] for name, job in workflow["jobs"].items()} == {
+        "sync": {"contents": "read", "id-token": "write", "issues": "write"},
+        "inactivity": {"contents": "read"},
+    }
     steps = workflow["jobs"]["sync"]["steps"]
+    pin_index = next(i for i, step in enumerate(steps) if step.get("name") == "Check reviewed source pins")
+    pins = steps[pin_index]
+    assert pins["env"]["GH_TOKEN"] == "${{ github.token }}"
+    assert "set -euo pipefail" in pins["run"]
+    assert 'if [ "$status" -ne 3 ]; then exit "$status"; fi' in pins["run"]
+    assert "gh issue list --state open" in pins["run"] and "select(.title == $title)" in pins["run"]
+    assert 'gh issue create --title "$title" --body "$body"' in pins["run"]
     freshness_index = next(i for i, step in enumerate(steps) if step.get("name") == "Check FEMA freshness")
-    assert freshness_index > next(i for i, step in enumerate(steps) if step.get("name") == "Check reviewed source pins")
+    assert freshness_index > pin_index
     step = steps[freshness_index]
     assert step["if"] == "${{ !inputs.args && !cancelled() }}"
     assert "set -o pipefail" in step["run"] and "python -m local_laws check-freshness | tee freshness.json" in step["run"]

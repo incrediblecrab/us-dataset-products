@@ -24,6 +24,7 @@ from .store import CARD, MANIFEST, HubStore, LocalStore, Superseded
 
 # Exit codes besides 0 (done) and 1 (verify found problems, a commit was superseded or a publisher/pin check failed).
 STOPPED = 2
+REVIEW = 3
 # What the Hub answers when Trusted Publishing was not registered for this repository and workflow.
 NO_PUBLISHER = "No trusted publisher configured"
 
@@ -42,8 +43,8 @@ def github_output(**values):
             for key, value in values.items():
                 handle.write(f"{key}={value}\n")
 
-def warn(message, level="warning"):
-    print(f"::{level}::{message}" if os.environ.get("GITHUB_ACTIONS") == "true" else f"{level}: {message}")
+def warn(message, level="warning", *, file=None):
+    print(f"::{level}::{message}" if os.environ.get("GITHUB_ACTIONS") == "true" else f"{level}: {message}", file=file)
 
 def trusted_publisher_error(error, repo):
     if NO_PUBLISHER not in str(error):
@@ -289,22 +290,30 @@ def cmd_check_pins(args):
     fetcher = Fetcher()
     try:
         report = {"bia_notices": tribes.latest(fetcher), "locus": locus.latest()}
-    except (SourceChanged, Blocked, Unavailable) as error:
-        warn(f"pin check could not finish: {type(error).__name__}: {error}", level="error")
+        notices = [item.get("document_number") for item in report["bia_notices"][:2]]
+        sha = report["locus"].get("sha")
+        if len(notices) != 2 or not all(isinstance(number, str) and number for number in notices):
+            raise SourceChanged("the Federal Register did not identify the latest two notices")
+        if not isinstance(sha, str) or not sha:
+            raise SourceChanged("the Hub did not identify the latest LOCUS-v1 revision")
+    except (SourceChanged, Blocked, Unavailable, httpx.HTTPError, json.JSONDecodeError) as error:
+        warn(f"pin check could not finish: {type(error).__name__}: {error}", level="error", file=sys.stderr)
         return 1
     finally:
         fetcher.close()
-    problems = []
-    latest = report["bia_notices"][:2]
+    review = []
+    problems = {}
     pinned = [tribes.NOTICE["document_number"], tribes.PREVIOUS["document_number"]]
-    if [item["document_number"] for item in latest] != pinned:
-        problems.append(f"Federal Register has newer BIA recognized-Tribes notices: latest two are {[item['document_number'] for item in latest]}, pinned are {pinned}; review the new notice and update local_laws/tribes.py pins before adopting it")
-    if report["locus"].get("sha") != locus.REVISION:
-        problems.append(f"LOCUS-v1 latest revision is {report['locus'].get('sha')}, pinned revision is {locus.REVISION}; review the new release before updating local_laws/locus.py")
-    print(json.dumps(report, indent=1))
-    for problem in problems:
-        warn(problem, level="error")
-    return 1 if problems else 0
+    if notices != pinned:
+        review.append({"source": "bia_notices", "pinned": pinned, "latest": notices, "title": f"local-laws: review BIA notices {', '.join(notices)}"})
+        problems["bia_notices"] = f"Federal Register has newer BIA recognized-Tribes notices: latest two are {notices}, pinned are {pinned}; review the new notice and update local_laws/tribes.py pins before adopting it"
+    if sha != locus.REVISION:
+        review.append({"source": "locus", "pinned": locus.REVISION, "latest": sha, "title": f"local-laws: review LOCUS-v1 {sha[:12]}"})
+        problems["locus"] = f"LOCUS-v1 latest revision is {sha}, pinned revision is {locus.REVISION}; review the new release before updating local_laws/locus.py"
+    print(json.dumps(dict(report, review=review, problems=problems), indent=1))
+    for problem in problems.values():
+        warn(problem, file=sys.stderr)
+    return REVIEW if review else 0
 
 def cmd_check_freshness(args):
     store = open_store(args)
@@ -439,7 +448,7 @@ def main(argv=None):
         return sub
 
     add("probe", cmd_probe, "cheaply decide whether New York, FEMA or the dataset card changed")
-    add("check-pins", cmd_check_pins, "fail if a manually pinned source has a newer release to review")
+    add("check-pins", cmd_check_pins, "report newer releases of manually pinned sources (exit 3 for review, 1 if the check cannot finish)")
     add("check-freshness", cmd_check_freshness, "check published FEMA files against the live source; fail if changed or unreadable beyond the stored-reading age limit")
     run = add("run", cmd_run, "download the sources, check them, build the tables and commit them with the manifest and card")
     run.add_argument("--workdir", help="keep scratch files here (default: a temporary directory, deleted afterwards); LOCUS's download needs about 1.3 GB")
