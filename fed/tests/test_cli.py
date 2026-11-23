@@ -324,10 +324,11 @@ def test_the_workflow_calls_only_commands_options_and_outputs_the_cli_has(monkey
 
 def test_the_schedule_is_what_the_code_and_card_say():
     _, triggers = load_workflow()
-    assert [entry["cron"] for entry in triggers["schedule"]] == [card.SCHEDULE]
+    assert [entry["cron"] for entry in triggers["schedule"]] == [card.SCHEDULE] == [f"37 */{card.SCHEDULE_HOURS} * * *"]
     text = card.render({})
-    assert f"scheduled daily at 12:37 UTC (`{card.SCHEDULE}`), which GitHub has been starting about four hours late, near 17:00 UTC, 12:00 EST or 13:00 EDT" in text and card.SCHEDULE == "37 12 * * *"
-    assert not re.search(r"scheduled every|every hour at|minutes past|every 5 minutes|every 6 hours|once a week|weekly", text)
+    assert f"scheduled every {card.SCHEDULE_HOURS} hours at 00:37, 06:37, 12:37 and 18:37 UTC (`{card.SCHEDULE}`)" in text
+    assert "GitHub starts scheduled runs late and sometimes drops them" in text
+    assert "From November 9 to 22, 2026 it started this repository's daily runs 5.8 to 10.1 hours after 12:37 UTC" in text
 
 
 @pytest.mark.parametrize("idle_days, fails", [(49, False), (50, True)])

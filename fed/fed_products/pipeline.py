@@ -31,6 +31,9 @@ MAX_ATTEMPTS = 3
 RETRY_AFTER_HOURS = 24
 # The probe asks for a sync once the last full listing is this old, so every list is reread even when the landing page has not changed.
 LISTING_HOURS = 24
+# The workflow runs every this many hours (card.SCHEDULE is its cron); an unchanged sync republishes its listing and run record once the last is an hour short of that old.
+SCHEDULE_HOURS = 6
+REPUBLISH_HOURS = SCHEDULE_HOURS - 1
 LEASE_MINUTES = 45
 RUNS_KEPT = 20
 # At most this many units are rechecked in one run, in partition order and oldest check first within a partition, so the rechecks that fall due together after a backfill spread over several runs instead of one long one.
@@ -279,13 +282,13 @@ def sync(ctx, source):
     if reason == "superseded":
         return dict(run, commits=ctx.stats["commits"])
     runs = base.get("runs") or []
-    # The listing is what the probe compares against, so it is published only by a run that brought every partition up to date with it; until then the probe keeps asking for a run. A run that finishes within an hour of the listing falling due republishes it, so the next probe does not ask for another full sync.
+    # Only a complete, unrestricted sync may advance the probe's listing. Allow an hour of scheduling jitter when republishing unchanged results.
     changed = False
     if finished and ctx.only is None and record:
         old = base.get("listing") or {}
-        changed = any(record[key] != old.get(key) for key in ("head", "editions", "scheduled", "partitions")) or age_hours(old.get("at")) > LISTING_HOURS - 1
+        changed = any(record[key] != old.get(key) for key in ("head", "editions", "scheduled", "partitions")) or age_hours(old.get("at")) > REPUBLISH_HOURS
         manifest["listing"] = dict(record, code=code)
-    if ctx.store.staged or ctx.stats["commits"] or changed or reason not in CLEAN_STOPS or not runs or age_hours(runs[-1].get("ended")) > 23:
+    if ctx.store.staged or ctx.stats["commits"] or changed or reason not in CLEAN_STOPS or not runs or age_hours(runs[-1].get("ended")) > REPUBLISH_HOURS:
         manifest["runs"] = runs[-(RUNS_KEPT - 1):] + [dict(run, commits=ctx.stats["commits"] + 1)]
         try:
             flush(ctx, manifest)

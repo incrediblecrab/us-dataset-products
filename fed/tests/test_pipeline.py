@@ -135,17 +135,21 @@ def test_missing_git_and_partial_actions_metadata_leave_provenance_unknown(tmp_p
     assert pipeline.code_identity() == {"commit": None, "run_url": None}
 
 
-@pytest.mark.parametrize("hours_old, republished", [(pipeline.LISTING_HOURS - 1.5, False), (pipeline.LISTING_HOURS - 0.5, True)])
-def test_a_run_republishes_the_listing_from_an_hour_before_it_falls_due(tmp_path, hours_old, republished):
+@pytest.mark.parametrize("hours_old, republished", [(pipeline.SCHEDULE_HOURS - 1.5, False), (pipeline.SCHEDULE_HOURS - 0.5, True)])
+@pytest.mark.parametrize("only", [None, frozenset({"2026"})], ids=["listing-age", "run-age"])
+def test_an_unchanged_sync_republishes_near_the_next_scheduled_run(tmp_path, hours_old, republished, only):
     store, state = local_store(tmp_path), beige()
     run_once(store, state, today=TODAY)
     m = store.read_manifest()
     m["listing"]["at"] = stamp(hours_old * 60)
+    if only:
+        m["runs"][-1]["ended"] = m["listing"]["at"]
     (store.root / MANIFEST).write_text(json.dumps(m))
-    commits = len(store.commits)
-    run = run_once(store, state, today=TODAY)
-    assert run["finished"] and (len(store.commits) > commits) == republished
-    assert (store.read_manifest()["listing"]["at"] != m["listing"]["at"]) == republished
+    run = run_once(store, state, today=TODAY, only=only)
+    saved = store.read_manifest()
+    assert run["finished"] and run["fetched"] == 0 and run["commits"] == int(republished)
+    assert len(saved["runs"]) == len(m["runs"]) + int(republished)
+    assert saved["listing"]["at"] == (run["started"] if republished and only is None else m["listing"]["at"])
 
 
 def test_a_run_that_fetches_claims_the_lease_before_its_first_fetch(tmp_path):

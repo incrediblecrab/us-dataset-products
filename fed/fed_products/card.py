@@ -5,13 +5,13 @@ from collections import Counter, defaultdict
 
 from . import board, minneapolis
 from .beige_book import MINNEAPOLIS_RECHECK_DAYS, RECENT_DAYS, RECENT_RECHECK_DAYS, RECHECK_DAYS, REPO_ID, SCHEMA
-from .pipeline import LEASE_MINUTES, LISTING_HOURS, MAX_ATTEMPTS, PROBE_KEY, RETRY_AFTER_HOURS, probe_state
+from .pipeline import LEASE_MINUTES, LISTING_HOURS, MAX_ATTEMPTS, PROBE_KEY, RETRY_AFTER_HOURS, SCHEDULE_HOURS, probe_state
 from .sections import DISTRICTS, STANDARD, rank
 
 GITHUB_REPO = "https://github.com/incrediblecrab/us-dataset-products"
 GITHUB = f"{GITHUB_REPO}/tree/main/fed"
 # The workflow's cron (.github/workflows/fed-pipeline.yml at the repository root); a test holds the two equal.
-SCHEDULE = "37 12 * * *"
+SCHEDULE = f"37 */{SCHEDULE_HOURS} * * *"
 BOARD_TERMS = "https://www.federalreserve.gov/disclaimer.htm"
 MINNEAPOLIS_TERMS = "https://www.minneapolisfed.org/site-information/disclaimer"
 COLUMN_DOCS = {
@@ -170,11 +170,11 @@ def render(manifest):
         "",
         "## How it stays current",
         "",
-        f"A GitHub Actions job is scheduled daily at 12:37 UTC (`{SCHEDULE}`), which GitHub has been starting about four hours late, near 17:00 UTC, 12:00 EST or 13:00 EDT. It reads the Board's Beige Book landing page, one request, and compares the newest edition it links and the number it links with the last complete sync, which it reads from `{PROBE_KEY}` in this card's metadata, so the check downloads no file. When either changed, or the last complete sync is {LISTING_HOURS} hours old, the job reads every list and the Minneapolis sitemap, fetches the editions that are new or whose links changed, and commits the changed years with this card. Then it checks the files on the Hub against the manifest and against a fresh reading of every list. A job that runs out of time while still fetching starts the next one itself.",
+        f"A GitHub Actions job is scheduled every {SCHEDULE_HOURS} hours at 00:37, 06:37, 12:37 and 18:37 UTC (`{SCHEDULE}`). It reads the Board's Beige Book landing page, one request, and compares the newest edition it links and the number it links with the last complete sync, which it reads from `{PROBE_KEY}` in this card's metadata, so the check downloads no file. When either changed, or the last complete sync is {LISTING_HOURS} hours old, the job reads every list and the Minneapolis sitemap, fetches the editions that are new or whose links changed, and commits the changed years with this card. Then it checks the files on the Hub against the manifest and against a fresh reading of every list. A job that runs out of time while still fetching starts the next one itself.",
         "",
         f"The Board's pages can change after release: on September 25, 2026 the pages of January 14, 2026 answered with a Last-Modified date of February 26, 2026. So the job also rechecks editions it holds: every {RECENT_RECHECK_DAYS} days for editions under {RECENT_DAYS} days old and every {RECHECK_DAYS} days for older ones, with a conditional request that the Board answers without a body when the page has not changed, and each Minneapolis month every {MINNEAPOLIS_RECHECK_DAYS} days besides whenever its sitemap entries change. An edition no list names any more is removed only once its page is gone; until then the check after each sync reports it.",
         "",
-        "GitHub starts scheduled jobs late, or drops them, when it is busy, and its documentation names the start of every hour as a busy time. So a new edition can take more than 12 hours to appear, and the delay is not fixed. A dropped job loses nothing, because the next one reads whatever changed.",
+        "GitHub starts scheduled runs late and sometimes drops them. From November 9 to 22, 2026 it started this repository's daily runs 5.8 to 10.1 hours after 12:37 UTC. The schedule uses minute 37 because GitHub names the start of every hour as a busy time. A new edition can take more than 12 hours to appear. A dropped job loses nothing, because the next one reads whatever changed.",
         "",
         f"The job writes with Hugging Face Trusted Publishing, so no write token is stored anywhere. One writer at a time: the manifest records who wrote last and when, a writer waits while another's record is under {LEASE_MINUTES} minutes old, and every commit names its parent commit, so a second writer's commit is refused instead of merged. `manifest.json` names each run's writer: `github-actions` for this job, `local` for the same pipeline run from a computer.",
         "",
