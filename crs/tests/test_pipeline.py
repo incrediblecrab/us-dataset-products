@@ -9,6 +9,7 @@ from crs_products import pipeline
 from crs_products.http import Blocked
 from crs_products.pipeline import MAX_ATTEMPTS, PROBE_KEY, Partition, Unit, decide, order, probe_state
 from crs_products.store import CARD, MANIFEST, LocalStore, Superseded
+from crs_products.summaries import SCHEDULE_HOURS
 from crs_products.card import render
 from crs_products.verify import verify
 from huggingface_hub import DatasetCard
@@ -82,14 +83,17 @@ def test_run_code_without_git_or_a_run_id(monkeypatch):
     assert pipeline.run_code() == {"commit": None, "run_url": None}
 
 
-def test_idle_rerun_fetches_and_commits_nothing(tmp_path, monkeypatch):
+@pytest.mark.parametrize("hours, expected_commits", [(SCHEDULE_HOURS - 1.5, 0), (SCHEDULE_HOURS - 0.5, 1)])
+def test_idle_rerun_fetches_nothing_and_republishes_only_when_due(tmp_path, monkeypatch, hours, expected_commits):
     sha = "a" * 40
     monkeypatch.setenv("GITHUB_SHA", sha)
     monkeypatch.setenv("GITHUB_SERVER_URL", "https://github.example")
     monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
     monkeypatch.setenv("GITHUB_RUN_ID", "12")
     store, state = local_store(tmp_path), scripted(units={"R40001": T1, "IN12001": T2})
-    run_once(store, state)
+    with monkeypatch.context() as previous:
+        shift_clock(previous, -hours)
+        run_once(store, state)
     manifest = store.read_manifest()
     assert manifest["runs"][-1]["code"] == {"commit": sha, "run_url": "https://github.example/owner/repo/actions/runs/12"}
     assert manifest["listing"]["code"] == manifest["runs"][-1]["code"]
@@ -97,9 +101,15 @@ def test_idle_rerun_fetches_and_commits_nothing(tmp_path, monkeypatch):
     monkeypatch.setenv("GITHUB_SHA", "b" * 40)
     monkeypatch.setenv("GITHUB_RUN_ID", "13")
     run = run_once(store, state)
-    assert run["finished"] and run["commits"] == 0
-    assert store.read_manifest() == manifest
-    assert len(store.commits) == commits and len(state.fetched) == fetched
+    assert run["finished"] and run["commits"] == expected_commits
+    assert len(store.commits) == commits + expected_commits and len(state.fetched) == fetched
+    after = store.read_manifest()
+    if expected_commits:
+        assert after["listing"]["at"] == after["runs"][-1]["started"] == run["started"]
+        assert after["runs"][:-1] == manifest["runs"] and after["listing"]["at"] != manifest["listing"]["at"]
+        assert set(store.commits[-1]["files"]) == {MANIFEST, CARD}
+    else:
+        assert after == manifest
 
 
 def test_a_run_that_fetches_claims_the_lease_before_its_first_fetch(tmp_path):

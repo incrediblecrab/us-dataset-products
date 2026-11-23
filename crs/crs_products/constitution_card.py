@@ -1,6 +1,6 @@
 """Renders the Constitution Annotated dataset's card from its manifest alone, like card.py for the products."""
 
-from .card import GITHUB, citation_lines, last_sync_lines, size_category
+from .card import GITHUB, SCHEDULE_TEXT, citation_lines, last_sync_lines, size_category
 from .constitution import REPO_ID, SCHEMA
 from .pipeline import MAX_ATTEMPTS, RETRY_AFTER_HOURS, TEXT_RETRY_HOURS
 
@@ -91,9 +91,9 @@ def render(manifest):
         "",
         "## How it stays current",
         "",
-        "A GitHub Actions job is scheduled at 12:37 UTC, which GitHub has been starting about four hours late, near 17:00 UTC (12:00 EST, 13:00 EDT). It lists the GPO-CONAN packages in GovInfo's collection of additional government publications (GPO) and the granules of each, then fetches the units that are new or whose package's `lastModified` changed, removes the ones GovInfo no longer has, and commits the changed packages with this card. `lastModified` is GovInfo's stamp, not the book's: on September 25, 2026, every package's was from March 7 to 8 or August 18, 2025, long after it was printed. A unit whose record and PDF did not change keeps its row, and its package file is not rewritten.",
+        f"{SCHEDULE_TEXT} Each run lists the GPO-CONAN packages in GovInfo's collection of additional government publications (GPO) and the granules of each, then fetches the units that are new or whose package's `lastModified` changed, removes the ones GovInfo no longer has, and commits the changed packages with this card. `lastModified` is GovInfo's stamp, not the book's: on September 25, 2026, every package's was from March 7 to 8 or August 18, 2025, long after it was printed. A unit whose record and PDF did not change keeps its row, and its package file is not rewritten.",
         "",
-        "The job writes with Hugging Face Trusted Publishing, so no write token is stored anywhere. `manifest.json` names each run's writer: `github-actions` for this job, `local` for the same pipeline run from a computer. GitHub starts scheduled jobs late, or drops them, when it is busy, so a new supplement can take more than a day to appear. Each run downloads `manifest.json`, and the Hub counts a download for each 5 minutes in which a run reads files, so part of this dataset's download count is this job.",
+        "The job writes with Hugging Face Trusted Publishing, so no write token is stored anywhere. `manifest.json` names each run's writer: `github-actions` for this job, `local` for the same pipeline run from a computer. Each run downloads `manifest.json`, and the Hub counts a download for each 5 minutes in which a run reads files, so part of this dataset's download count is this job.",
         "",
         "## Known gaps",
         "",

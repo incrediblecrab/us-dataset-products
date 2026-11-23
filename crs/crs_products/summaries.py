@@ -16,7 +16,7 @@ from datetime import datetime, timedelta, timezone
 
 import pyarrow as pa
 
-from .pipeline import CLEAN_STOPS, FATAL, MANIFEST_VERSION, MAX_REMOVED_SHARE, MIN_REMOVED_GUARD, RUNS_KEPT, STAMP, age_hours, flush, new_manifest, other_writer, utcnow
+from .pipeline import CLEAN_STOPS, FATAL, MANIFEST_VERSION, MAX_REMOVED_SHARE, MIN_REMOVED_GUARD, REPUBLISH_HOURS, RUNS_KEPT, SCHEDULE_HOURS, STAMP, age_hours, flush, new_manifest, other_writer, utcnow
 from .store import Superseded, write_parquet
 from .text import html_text, tidy
 
@@ -33,10 +33,8 @@ TYPES = ("hr", "s", "hjres", "sjres", "hconres", "sconres", "hres", "sres")
 EPOCH = "1900-01-01T00:00:00Z"
 # Each run reads again what changed this long before the last run's newest updateDate.
 OVERLAP_HOURS = 48
-# How often .github/workflows/crs-summaries.yml at the repository root runs (its cron says the same; a test checks).
-SCHEDULE_HOURS = 24
-# The daily check runs on the first run this long after the last one: under 24 hours and over 24 - SCHEDULE_HOURS, so it keeps to one slot of the schedule. With one run a day it is well under 24 hours, because GitHub starts scheduled runs hours late by varying amounts, and a run that started less than a day after the one before must still check.
-RECONCILE_HOURS = 12
+# The daily check skips the 18-hour slot but is due at the 24-hour slot, with some slack for variable start times.
+RECONCILE_HOURS = 21
 # Each daily reconciliation also reads again the slices read longest ago, so every slice is read in full at least this often.
 RESYNC_DAYS = 30
 # (sort, limit, first offset) orders for one second's items. Inside one second of /summaries/100/hr (1,391 summaries at 2015-10-01T15:15:02Z) the first four together read all 1,391 in 23 requests, where any one alone read 1,100 to 1,380 (measured September 25, 2026).
@@ -417,9 +415,9 @@ def sync(ctx, source):
         listing = {"count": head["count"], "newest": head["newest"], "listed": sum(entry.get("rows") or 0 for entry in entries.values()), "at": started,
                    "partitions": {key: entries[key].get("listed") for key in sorted(entries)}}
         old = base.get("listing") or {}
-        changed = any(listing[key] != old.get(key) for key in ("count", "newest", "listed", "partitions")) or age_hours(old.get("at")) > 23 or manifest.get("reconciled_at") != base.get("reconciled_at")
+        changed = any(listing[key] != old.get(key) for key in ("count", "newest", "listed", "partitions")) or age_hours(old.get("at")) > REPUBLISH_HOURS or manifest.get("reconciled_at") != base.get("reconciled_at")
         manifest["listing"] = dict(listing, code=ctx.code)
-    if ctx.store.staged or ctx.stats["commits"] or changed or manifest["failures"] != (base.get("failures") or {}) or reason not in CLEAN_STOPS or not runs or age_hours(runs[-1].get("ended")) > 23:
+    if ctx.store.staged or ctx.stats["commits"] or changed or manifest["failures"] != (base.get("failures") or {}) or reason not in CLEAN_STOPS or not runs or age_hours(runs[-1].get("ended")) > REPUBLISH_HOURS:
         manifest["runs"] = runs[-(RUNS_KEPT - 1):] + [dict(record, commits=ctx.stats["commits"] + 1)]
         try:
             flush(ctx, manifest)

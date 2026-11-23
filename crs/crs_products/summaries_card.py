@@ -3,8 +3,8 @@
 import math
 from collections import defaultdict
 
-from .card import GITHUB, citation_lines, last_sync_lines, size_category
-from .summaries import FIRST_CONGRESS, OVERLAP_HOURS, RECONCILE_HOURS, REPO_ID, RESYNC_DAYS, SCHEDULE_HOURS, SCHEMA, TYPES
+from .card import GITHUB, SCHEDULE_TEXT, citation_lines, last_sync_lines, size_category
+from .summaries import FIRST_CONGRESS, OVERLAP_HOURS, RECONCILE_HOURS, REPO_ID, RESYNC_DAYS, SCHEMA, TYPES
 
 COLUMN_DOCS = {
     "id": "congress-type-number-versionCode, for example 119-hr-8893-00",
@@ -107,11 +107,11 @@ def render(manifest):
         "",
         "## How it stays current",
         "",
-        f"A GitHub Actions job is scheduled every {SCHEDULE_HOURS} hours, at 12:37 UTC, which GitHub has been starting about four hours late, near 17:00 UTC (12:00 EST, 13:00 EDT). It reads the summaries whose `updateDate` is at most {OVERLAP_HOURS} hours older than the newest the previous run saw, and commits the slices they changed with this card. Once a day, on the first run at least {RECONCILE_HOURS} hours after the last check, it also asks the API for each slice's count, reads again in full each slice whose count differs from its rows here, and the {math.ceil(len(entries) / RESYNC_DAYS) or 1} slices read longest ago once that was more than {RESYNC_DAYS} days ago. A slice read in full loses the summaries the API no longer lists.",
+        f"{SCHEDULE_TEXT} Each run reads the summaries whose `updateDate` is at most {OVERLAP_HOURS} hours older than the newest the previous run saw, and commits the slices they changed with this card. Once a day, on the first run at least {RECONCILE_HOURS} hours after the last check, it also asks the API for each slice's count, reads again in full each slice whose count differs from its rows here, and the {math.ceil(len(entries) / RESYNC_DAYS) or 1} slices read longest ago once that was more than {RESYNC_DAYS} days ago. A slice read in full loses the summaries the API no longer lists.",
         "",
         "The listing orders summaries by `updateDate`, but summaries that share one come back in a different order from one request to the next, so paging by offset skips some and repeats others: one pass over the House bills of the 100th Congress read 6,644 distinct summaries of 6,765 on September 25, 2026. So the pipeline reads windows of `updateDate`s instead, moving each window's end down to the oldest second on its page, and pages a second that fills a whole page in several orders until it has read that second's count. That read all 6,765 of those summaries in 102 requests.",
         "",
-        f"The job writes with Hugging Face Trusted Publishing, so no write token is stored anywhere. `manifest.json` names each run's writer: `github-actions` for this job, `local` for the same pipeline run from a computer. GitHub starts scheduled jobs late, or drops them, when it is busy, so a new summary can take more than {SCHEDULE_HOURS} hours to appear. Each run downloads `manifest.json` and the slices it updates, and the Hub counts a download for each 5 minutes in which a run reads files, so part of this dataset's download count is this job.",
+        "The job writes with Hugging Face Trusted Publishing, so no write token is stored anywhere. `manifest.json` names each run's writer: `github-actions` for this job, `local` for the same pipeline run from a computer. Each run downloads `manifest.json` and the slices it updates, and the Hub counts a download for each 5 minutes in which a run reads files, so part of this dataset's download count is this job.",
         "",
         "## Known gaps",
         "",

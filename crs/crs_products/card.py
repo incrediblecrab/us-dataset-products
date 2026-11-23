@@ -4,13 +4,14 @@ import json
 import re
 from collections import defaultdict
 
-from .pipeline import MAX_ATTEMPTS, PROBE_KEY, RETRY_AFTER_HOURS, TEXT_RETRY_HOURS, probe_state
+from .pipeline import MAX_ATTEMPTS, PROBE_KEY, RETRY_AFTER_HOURS, SCHEDULE_HOURS, TEXT_RETRY_HOURS, probe_state
 from .store import SCHEMA
 from .source import listing_problem
 from .verify import TOLERANCE_MIN
 
 GITHUB_REPO = "https://github.com/incrediblecrab/us-dataset-products"
 GITHUB = f"{GITHUB_REPO}/tree/main/crs"
+SCHEDULE_TEXT = f"A GitHub Actions job is scheduled every {SCHEDULE_HOURS} hours at 00:37, 06:37, 12:37 and 18:37 UTC. GitHub starts scheduled runs late and sometimes drops them. From November 9 to 22, 2026 it started this repository's daily runs 5.8 to 10.1 hours after 12:37 UTC."
 REPO_ID = "incrediblecrab/us-crs-research-papers"
 COLUMN_DOCS = {
     "id": "CRS product number, for example R49359, IN12740 or 98-684",
@@ -147,13 +148,13 @@ def render(manifest):
         "",
         "## How it stays current",
         "",
-        "A GitHub Actions job is scheduled at 12:37 UTC, which GitHub has been starting about four hours late, near 17:00 UTC (12:00 EST, 13:00 EDT). It asks the API for its product count and its most recently updated product: one request. When either changed, or the last full listing is a day old, the job lists every product and fetches the ones that are new or whose `updateDate` changed, removes the ones the API no longer has, and commits the changed partitions with this card. A job that runs out of time while still fetching starts the next one itself.",
+        f"{SCHEDULE_TEXT} The probe asks the API for its product count and its most recently updated product: one request. When either changed, or the last full listing is a day old, the job lists every product and fetches the ones that are new or whose `updateDate` changed, removes the ones the API no longer has, and commits the changed partitions with this card. A job that runs out of time while still fetching starts the next one itself.",
         "",
         "A product whose `updateDate` changed while its record and text did not keeps its row, its partition is not rewritten, and `manifest.json` records the new `updateDate`, so the product is not fetched again until its `updateDate` next changes. Congress.gov re-stamps some products about every hour without changing them: on September 25, 2026, 26 of 26 such re-fetches of 13 products returned the same record and the same PDF or HTML file, 3 of them with topics in another order, and each rewrite of their 10 partitions added about 100 MB to this repository's history.",
         "",
         f"The check reads who wrote last and which partitions are incomplete from `{PROBE_KEY}` in this card's metadata rather than downloading `manifest.json`. The Hub counts file downloads, so checks stay out of the download count; syncs, which download files, are in it.",
         "",
-        "GitHub starts scheduled jobs late, or drops them, when it is busy, and its documentation names the start of every hour as a busy time. From September 27 to October 15, 2026 it started every scheduled run of this repository's jobs 2.4 to 9.2 hours late, which is why the job is scheduled at 12:37 UTC. On September 24, 2026, from 06:01 to 15:26 UTC, it started 1 of the 113 jobs an earlier 5-minute schedule asked for. So a new product can take more than a day to appear, and the delay is not fixed. A dropped job loses nothing, because the next one reads whatever changed.",
+        "The schedule uses minute 37 because GitHub's documentation names the start of every hour as a busy time. From September 27 to October 15, 2026 GitHub started every scheduled run of this repository's jobs 2.4 to 9.2 hours late. On September 24, 2026, from 06:01 to 15:26 UTC, it started 1 of the 113 jobs an earlier 5-minute schedule asked for. A new product can take longer than the scheduled interval to appear. A dropped job loses nothing, because the next one reads whatever changed.",
         "",
         "The job writes with Hugging Face Trusted Publishing, so no write token is stored anywhere. Only one writer fetches at a time, because www.congress.gov asks for at most 10 requests a minute in total: the manifest records who wrote last and when, a writer waits while another's record is under 45 minutes old, and every commit names its parent commit, so a second writer's commit is refused instead of merged. `manifest.json` names each run's writer: `github-actions` for this job, `local` for the same pipeline run from a computer.",
         "",
