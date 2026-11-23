@@ -21,10 +21,11 @@ import pyarrow.parquet as pq
 from huggingface_hub import HfFileSystem, hf_hub_download
 from huggingface_hub.errors import EntryNotFoundError, RemoteEntryNotFoundError
 
-from .card import citation_lines
+from .card import citation_lines, schedule_text
 from .cli import step_outputs, trusted_publishing
 from .http import Blocked, Fetcher, QuotaExhausted, Unavailable
 from .markup import field, parse, render, resolve, squash
+from .pipeline import SCHEDULE_HOURS
 from .provenance import code_links, run_code
 from .sources import BASE, COLLECTIONS, iso_date, long_date, repo_id, reread_url, shown_terms
 from .store import MANIFEST, HubStore, LocalStore, hub_read, schema_differences, sha256_file
@@ -32,6 +33,7 @@ from .store import MANIFEST, HubStore, LocalStore, hub_read, schema_differences,
 REPO_ID = repo_id("cases")
 # Bumped when row assembly changes, so every term is assembled again; its docket pages are carried over, not fetched again.
 BUILDER = 4
+REPUBLISH_AFTER = timedelta(hours=SCHEDULE_HOURS - 1)
 CURRENT_RECHECK = timedelta(hours=6)
 RECHECK = {"found": timedelta(days=7), "missing": timedelta(days=30)}
 OPINION_COLLECTIONS = ("opinions-of-the-court", "opinions-relating-to-orders", "in-chambers-opinions")
@@ -856,6 +858,17 @@ def empty_manifest():
     return {"dataset": REPO_ID, "generated_at": None, "terms": {}, "runs": []}
 
 
+def publish_run(store, manifest, record, *, complete, message):
+    at = now_iso()
+    manifest.update(dataset=REPO_ID, generated_at=at, runs=[dict(record, at=at)] + manifest.get("runs", [])[:49])
+    if complete:
+        manifest.update(last_complete_at=at, last_complete_code=record["code"])
+    text = json.dumps(manifest, indent=1, sort_keys=True, ensure_ascii=False) + "\n"
+    stage(store, MANIFEST).write_text(text)
+    stage(store, "README.md").write_text(render_card(json.loads(text)))
+    return store.commit(message)
+
+
 def render_card(manifest):
     terms = manifest.get("terms", {})
     total = {"cases": 0, "docket_found": 0, "opinions": 0, "transcripts": 0, "audio": 0}
@@ -873,9 +886,11 @@ def render_card(manifest):
     for column in SCHEMA:
         lines.append(f"| `{column.name}` | {column.type} | {docs[column.name]} |")
     lines += ["", "## Updates and limits", ""]
-    if links := code_links(manifest.get("last_complete_code")):
-        lines += [f"Last complete run: {links}.", ""]
-    lines += [f"A GitHub Actions workflow runs the builder once a day, scheduled at 12:37 UTC, which GitHub has been starting about four hours late, near 17:00 UTC (12:00 EST, 13:00 EDT), before it syncs the source datasets, so a row reflects its sources as of the previous run. A run assembles a term again when one of its source partitions changed, and asks for a docket page again when it is due: after {CURRENT_RECHECK.seconds // 3600} hours for the current and previous terms, after {RECHECK['found'].days} days for a page found in an older term, and after {RECHECK['missing'].days} days for a docket with no page. It asks conditionally where it can, so an unchanged page keeps its stored bytes. A docket that a run does not reach keeps what the last run stored.", "", "The opinion listings start at OT2017 for Opinions of the Court and OT2011 for Opinions Relating to Orders; earlier opinions are only in the volumes of the United States Reports (collection `us-reports` of `us-scotus-opinions`). Once opinions are printed, a listing links the bound volume or preliminary print at the page each starts on instead of the slip opinion. A case's pages of such a file run from that page to the page before the next page any listing links in it, and stop early at a page of orders (whose running head gives dates), a Reporter's Note, the heading of the orders, the Court's allotment or rules orders, or the index; an opinion printed on the page of the order it concerns carries the orders printed around it on those pages. Some listed files answer 404 on the Court's site (in September 2026, the four OT2017 preliminary prints of volumes 584 and 585, and every file the OT2011 to OT2015 Opinions Relating to Orders list), so those listed files are missing here. A case that no listing gives an opinion of the Court or in chambers, which is every case before OT2017, gets the pages of the Reports that print it, from the volumes dated to its term: a case starts on the page whose caption gives its docket and dates, its pages run to the page before the next caption and stop early as above, its `date` is the last date of the caption (for a decree, the date it was entered) and its `citation` comes from the running heads. A consolidated case whose listing names only its lead docket gets the opinion whose first two pages carry the caption's footnote naming it among the cases decided together (`*Together with No. 25–250, …`); a numbered footnote, which is about another case, is not read. The Reports print a docket with its year from OT1971; before that a caption numbers a case `No. 15`, which no other source uses, so before OT1971 only original cases get their pages. The volumes before 502 are scans read by OCR: a caption the OCR misreads is missed and its pages go to the case before it, and a misread docket gives the pages to the wrong case or to a row of its own. A docket that would be dated after the next term or more than ten years before the term is taken for a misreading and dropped. In OT1970, OT1971, OT1982, OT1990, OT1995, OT2005, OT2013 and OT2017, 716 captions give a docket that another source also names; the Reports' titles of 14 of them differ from the other sources', 9 because the cases were decided together and 5 because the same case is named another way, and none because of a misread docket. That comparison cannot catch a misread docket that no other source names, which makes a row of its own. The Court's online dockets begin during OT1999, where some cases have a page and others do not (No. 99-478 has one, No. 99-5525 none); a case without a page has `docket_found` false. Documents linked from docket entries (petitions, briefs, the Questions Presented) and argument audio are linked, not stored.", "", "## License", "", "Supreme Court opinions, orders and dockets are works of the United States Government, which are not subject to copyright in the United States ([17 U.S.C. § 105](https://www.copyright.gov/title17/92chap1.html#105)). Argument transcripts are prepared for the Court by court reporting companies; this dataset makes no claim about their copyright status. This card does not give legal advice.", "", *citation_lines(REPO_ID, "Supreme Court of the United States: Cases")]
+    last = [manifest.get("last_complete_at"), code_links(manifest.get("last_complete_code"))]
+    if any(last):
+        lines += [f"Last complete run: {'; '.join(filter(None, last))}.", ""]
+    lines += [schedule_text() + f" The builder runs before the source datasets sync, so a row reflects its sources as of the previous run. A run assembles a term again when one of its source partitions changed, and asks for a docket page again when it is due: after {CURRENT_RECHECK.seconds // 3600} hours for the current and previous terms, after {RECHECK['found'].days} days for a page found in an older term, and after {RECHECK['missing'].days} days for a docket with no page. It asks conditionally where it can, so an unchanged page keeps its stored bytes. A docket that a run does not reach keeps what the last run stored.", ""]
+    lines += ["The opinion listings start at OT2017 for Opinions of the Court and OT2011 for Opinions Relating to Orders; earlier opinions are only in the volumes of the United States Reports (collection `us-reports` of `us-scotus-opinions`). Once opinions are printed, a listing links the bound volume or preliminary print at the page each starts on instead of the slip opinion. A case's pages of such a file run from that page to the page before the next page any listing links in it, and stop early at a page of orders (whose running head gives dates), a Reporter's Note, the heading of the orders, the Court's allotment or rules orders, or the index; an opinion printed on the page of the order it concerns carries the orders printed around it on those pages. Some listed files answer 404 on the Court's site (in September 2026, the four OT2017 preliminary prints of volumes 584 and 585, and every file the OT2011 to OT2015 Opinions Relating to Orders list), so those listed files are missing here. A case that no listing gives an opinion of the Court or in chambers, which is every case before OT2017, gets the pages of the Reports that print it, from the volumes dated to its term: a case starts on the page whose caption gives its docket and dates, its pages run to the page before the next caption and stop early as above, its `date` is the last date of the caption (for a decree, the date it was entered) and its `citation` comes from the running heads. A consolidated case whose listing names only its lead docket gets the opinion whose first two pages carry the caption's footnote naming it among the cases decided together (`*Together with No. 25–250, …`); a numbered footnote, which is about another case, is not read. The Reports print a docket with its year from OT1971; before that a caption numbers a case `No. 15`, which no other source uses, so before OT1971 only original cases get their pages. The volumes before 502 are scans read by OCR: a caption the OCR misreads is missed and its pages go to the case before it, and a misread docket gives the pages to the wrong case or to a row of its own. A docket that would be dated after the next term or more than ten years before the term is taken for a misreading and dropped. In OT1970, OT1971, OT1982, OT1990, OT1995, OT2005, OT2013 and OT2017, 716 captions give a docket that another source also names; the Reports' titles of 14 of them differ from the other sources', 9 because the cases were decided together and 5 because the same case is named another way, and none because of a misread docket. That comparison cannot catch a misread docket that no other source names, which makes a row of its own. The Court's online dockets begin during OT1999, where some cases have a page and others do not (No. 99-478 has one, No. 99-5525 none); a case without a page has `docket_found` false. Documents linked from docket entries (petitions, briefs, the Questions Presented) and argument audio are linked, not stored.", "", "## License", "", "Supreme Court opinions, orders and dockets are works of the United States Government, which are not subject to copyright in the United States ([17 U.S.C. § 105](https://www.copyright.gov/title17/92chap1.html#105)). Argument transcripts are prepared for the Court by court reporting companies; this dataset makes no claim about their copyright status. This card does not give legal advice.", "", *citation_lines(REPO_ID, "Supreme Court of the United States: Cases")]
     return "\n".join(lines)
 
 
@@ -975,6 +990,11 @@ def cmd_run(args):
             pending.append((term, entry, signature))
         code = run_code() if pending else None
         complete = terms == all_terms
+        if complete and not pending and not run.get("stopped") and not out_of_time(deadline):
+            # Older manifests recorded the publication time but not a separate last-complete timestamp.
+            last = manifest.get("last_complete_at", manifest.get("generated_at"))
+            if not last or now - parse_time(last) > REPUBLISH_AFTER:
+                run["commit"] = publish_run(store, manifest, {"reason": "unchanged", "code": run_code()}, complete=True, message="cases: no changes")
         for term, entry, signature in pending:
             if out_of_time(deadline):
                 run["stopped"] = "budget"
@@ -1020,16 +1040,9 @@ def cmd_run(args):
             rows = assemble_rows(term, cases, pages, audio)
             stats = write_case_parquet(rows, stage(store, parquet_path(key)))
             manifest["terms"][key] = {**stats, "builder": BUILDER, "source_partitions": signature, "complete": all(pages[docket] for docket in dockets), "dockets": {docket: {name: page.get(name) for name in PAGE_KEYS} for docket, page in pages.items() if page}, "failures": failures, "docket_found": sum(1 for row in rows if row["docket_found"]), "opinions": sum(1 for row in rows if row["opinions"]), "transcripts": sum(1 for row in rows if row["transcripts"]), "audio": sum(1 for row in rows if row["audio"]), "audio_fetch": audio_stats}
-            manifest["dataset"] = REPO_ID
-            manifest["generated_at"] = now_iso()
-            manifest["runs"] = [{"at": manifest["generated_at"], "term": key, "rows": stats["rows"], "reason": reason, "fetched": dict(fetched), "failures": len(failures), "code": code}] + manifest.get("runs", [])[:49]
+            record = {"term": key, "rows": stats["rows"], "reason": reason, "fetched": dict(fetched), "failures": len(failures), "code": code}
             complete = complete and manifest["terms"][key]["complete"] and not failures and not run.get("stopped")
-            if complete and term == pending[-1][0] and not out_of_time(deadline):
-                manifest["last_complete_code"] = code
-            text = json.dumps(manifest, indent=1, sort_keys=True, ensure_ascii=False) + "\n"
-            stage(store, MANIFEST).write_text(text)
-            stage(store, "README.md").write_text(render_card(json.loads(text)))
-            commit = store.commit(f"cases: {key} ({reason})")
+            commit = publish_run(store, manifest, record, complete=complete and term == pending[-1][0] and not out_of_time(deadline), message=f"cases: {key} ({reason})")
             run["terms"].append({"term": key, "reason": reason, "rows": stats["rows"], "fetched": dict(fetched), "failures": len(failures), "complete": manifest["terms"][key]["complete"], "commit": commit})
             if run.get("stopped"):
                 break

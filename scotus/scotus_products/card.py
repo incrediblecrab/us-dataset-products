@@ -3,7 +3,7 @@
 import re
 from collections import Counter, defaultdict
 
-from .pipeline import MAX_ATTEMPTS, RETRY_AFTER_HOURS
+from .pipeline import MAX_ATTEMPTS, RETRY_AFTER_HOURS, SCHEDULE_HOURS
 from .provenance import code_links
 from .sources import CATEGORIES, COLLECTIONS, repo_id as category_repo
 from .store import SCHEMA
@@ -95,6 +95,11 @@ FAILURES_SHOWN = 25
 
 def joined(items):
     return ", ".join(items[:-1]) + " and " + items[-1] if len(items) > 1 else items[0]
+
+
+def schedule_text():
+    times = joined([f"{hour:02d}:37" for hour in range(0, 24, SCHEDULE_HOURS)])
+    return f"A GitHub Actions workflow is scheduled every {SCHEDULE_HOURS} hours at {times} UTC. GitHub starts scheduled runs late and sometimes drops them; from November 9 to 22, 2026 it started this repository's daily runs 5.8 to 10.1 hours after 12:37 UTC."
 
 
 def table_cell(text):
@@ -349,7 +354,7 @@ def render_category(category, manifests):
         "",
         "## How it stays current",
         "",
-        "A GitHub Actions job is scheduled daily at 12:37 UTC, which GitHub usually starts hours late and sometimes drops; a dropped run loses nothing, because the next one reads every listing page again. Each collection's card says what a run checks.",
+        schedule_text() + " After a dropped run, the next one reads every listing page again. Each collection's card says what a run checks.",
         "",
         "## Files",
         "",

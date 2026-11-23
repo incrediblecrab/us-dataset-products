@@ -1,10 +1,11 @@
-# At 12:37 UTC, which GitHub has been starting about four hours late, near 17:00 UTC (12:00 EST, 13:00 EDT), first assemble the case-centric dataset from the document datasets and the docket pages due for a check, then sync every collection with www.supremecourt.gov within one time budget, in the order sources.COLLECTIONS lists them: each collection reads its listing pages, fetches what is new or changed, and commits to its category's dataset. Each collection still to come keeps --reserve-minutes of the budget, so a long backfill cannot starve the updates after it. Then verify each collection the run changed against its manifest. A run that ran out of budget while files remained starts the next run itself.
+# Scheduled every 6 hours at 00:37, 06:37, 12:37 and 18:37 UTC. Minute 37 avoids the start of the hour, which GitHub identifies as busy. GitHub starts scheduled runs late and sometimes drops them; from November 9 to 22, 2026 it started this repository's daily runs 5.8 to 10.1 hours after 12:37 UTC.
+# First assemble the case-centric dataset from the document datasets and the docket pages due for a check, then sync every collection with www.supremecourt.gov within one time budget, in the order sources.COLLECTIONS lists them: each collection reads its listing pages, fetches what is new or changed, and commits to its category's dataset. Each collection still to come keeps --reserve-minutes of the budget, so a long backfill cannot starve the updates after it. Then verify each collection the run changed against its manifest. A run that ran out of budget while files remained starts the next run itself.
 # Writes to Hugging Face use Trusted Publishing: with `id-token: write`, the CLI sets HF_OIDC_RESOURCE to each collection's dataset before writing to it, so no Hugging Face token is stored anywhere. The workflow uses no secret.
 name: scotus-pipeline
 
 on:
   schedule:
-    - cron: "37 12 * * *"
+    - cron: "37 */6 * * *"
   workflow_dispatch:
     inputs:
       dataset:

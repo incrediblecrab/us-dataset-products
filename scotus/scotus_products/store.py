@@ -85,7 +85,7 @@ def failure(error):
 
 
 def hub_read(call, *args, **kwargs):
-    """call(*args, **kwargs), retried as a commit is. huggingface_hub 1.32.0 does not retry dataset_info, get_paths_info or list_repo_files at all, and retries a file download's 429 about five times with waits under 8 seconds; a sibling pipeline's scheduled run of November 11, 2026 stopped on one 429 from dataset_info ("maximum time in concurrency queue reached"), and a scotus run reads 6 to 7 repos and 24 collections a day."""
+    """call(*args, **kwargs), retried as a commit is. huggingface_hub 1.32.0 does not retry dataset_info, get_paths_info or list_repo_files at all, and retries a file download's 429 about five times with waits under 8 seconds; a sibling pipeline's scheduled run of November 11, 2026 stopped on one 429 from dataset_info ("maximum time in concurrency queue reached"), and each SCOTUS run reads 6 to 7 repos and 24 collections."""
     for attempt in range(HUB_ATTEMPTS):
         try:
             return call(*args, **kwargs)

@@ -16,6 +16,7 @@ from huggingface_hub.errors import EntryNotFoundError, HfHubHTTPError, LocalEntr
 from conftest import page_bytes
 from scotus_products import cases
 from scotus_products.http import Blocked
+from scotus_products.pipeline import SCHEDULE_HOURS
 from scotus_products.sources import reread_url
 from scotus_products.store import MANIFEST, sha256_file
 
@@ -505,7 +506,7 @@ def test_run_builds_terms_then_leaves_them_until_due(world, capsys, actions_code
     manifest = world.manifest()
     assert [r["code"] for r in manifest["runs"]] == [actions_code, actions_code]
     sha = actions_code["commit"]
-    assert f"Last complete run: commit [{sha[:12]}](https://github.com/incrediblecrab/us-dataset-products/commit/{sha}), [Actions run]({actions_code['run_url']})." in (world.root / "README.md").read_text()
+    assert f"Last complete run: {manifest['generated_at']}; commit [{sha[:12]}](https://github.com/incrediblecrab/us-dataset-products/commit/{sha}), [Actions run]({actions_code['run_url']})." in (world.root / "README.md").read_text()
     assert cases.cmd_verify(world.args) == 0
     capsys.readouterr()
 
@@ -515,6 +516,36 @@ def test_run_builds_terms_then_leaves_them_until_due(world, capsys, actions_code
     monkeypatch.setattr(cases.LocalStore, "commit", lambda *_: pytest.fail("an unchanged run must not commit"))
     status, report = world.run(capsys)
     assert status == 0 and report["terms"] == [] and len(world.site.calls) == asked and world.manifest() == manifest
+
+
+@pytest.mark.parametrize(("hours", "terms", "republishes"), [(SCHEDULE_HOURS - 1.5, None, False), (SCHEDULE_HOURS - 0.5, None, True), (SCHEDULE_HOURS - 0.5, "OT2010", False)])
+def test_unchanged_cases_republish_only_after_a_full_check_when_due(world, capsys, monkeypatch, actions_code, hours, terms, republishes):
+    clock = NOW
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz):
+            return clock.astimezone(tz)
+
+    monkeypatch.setattr(cases, "datetime", Clock)
+    world.run(capsys)
+    before = world.manifest()
+    asked = len(world.site.calls)
+    clock += timedelta(hours=hours)
+    monkeypatch.setenv("GITHUB_RUN_ID", "43")
+    world.args.terms = terms
+    status, report = world.run(capsys)
+    assert status == 0 and report["terms"] == [] and len(world.site.calls) == asked
+    after = world.manifest()
+    if not republishes:
+        assert after == before and "commit" not in report
+        return
+    assert after["terms"] == before["terms"] and after["runs"][1:] == before["runs"]
+    code = after["last_complete_code"]
+    assert code["run_url"].endswith("/runs/43") and code["commit"] == actions_code["commit"]
+    assert after["runs"][0] == {"reason": "unchanged", "at": cases.now_iso(), "code": code}
+    card = (world.root / "README.md").read_text()
+    assert f"Last complete run: {cases.now_iso()};" in card and code["run_url"] in card
 
 
 def test_budget_stop_keeps_what_it_has_and_the_next_run_finishes(world, capsys, monkeypatch):
@@ -624,6 +655,7 @@ def test_verify_names_what_does_not_match(world, capsys):
         return status, json.loads(capsys.readouterr().out)["problems"]
 
     def legacy(manifest):
+        del manifest["last_complete_at"]
         del manifest["last_complete_code"]
         for run in manifest["runs"]:
             del run["code"]
@@ -673,6 +705,8 @@ def test_verify_names_a_term_file_with_other_columns(world, capsys):
 
 def test_the_cases_card_ends_with_a_citation_naming_the_dataset():
     card = cases.render_card(cases.empty_manifest())
+    assert "scheduled every 6 hours at 00:37, 06:37, 12:37 and 18:37 UTC" in card
+    assert "sometimes drops them" in card and "5.8 to 10.1 hours after 12:37 UTC" in card
     assert card.rstrip().endswith("```") and f"\\url{{https://huggingface.co/datasets/{cases.REPO_ID}}}" in card[card.index("## Citation"):]
 
 

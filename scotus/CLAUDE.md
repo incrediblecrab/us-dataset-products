@@ -13,7 +13,9 @@ This folder builds public Hugging Face datasets of the twenty-four Supreme Court
 .venv/bin/python -m scotus_products.cases {run,verify,card} --help
 ```
 
-`.venv` links to the shared `~/.venvs/main`; extraction also needs poppler's `pdftotext`, `pdfinfo` and `pdfimages`. Use `--local DIR` for any local build; without it `run` writes to the published datasets, so do not run it that way unless the owner asks. `../.github/workflows/scotus-pipeline.yml` runs the scheduled sync and publishes through Hugging Face Trusted Publishing. GitHub disables schedules after 60 days without a commit; its `inactivity` job fails at 50 days to warn first and deliberately makes no keepalive commit, which GitHub treats as a Terms violation, so do not add one.
+`.venv` links to the shared `~/.venvs/main`; extraction also needs poppler's `pdftotext`, `pdfinfo` and `pdfimages`. Use `--local DIR` for any local build; without it `run` writes to the published datasets, so do not run it that way unless the owner asks. `../.github/workflows/scotus-pipeline.yml` publishes through Hugging Face Trusted Publishing.
+
+The sync is scheduled every 6 hours at 00:37, 06:37, 12:37 and 18:37 UTC. Keep the cron in step with `pipeline.SCHEDULE_HOURS`, not the docket rechecks or retry backoffs. GitHub starts scheduled runs late and sometimes drops them; from November 9 to 22, 2026 it started this repository's daily runs 5.8 to 10.1 hours after 12:37 UTC. GitHub disables schedules after 60 days without a commit; its `inactivity` job fails at 50 days to warn first and deliberately makes no keepalive commit, which GitHub treats as a Terms violation, so do not add one.
 
 ## Rules the data depends on
 

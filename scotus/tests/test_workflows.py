@@ -5,6 +5,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from scotus_products.pipeline import SCHEDULE_HOURS
+
 
 @pytest.mark.parametrize("name", ["scotus-pipeline.yml", "scotus-test.yml"])
 def test_workflows_use_the_folder_inside_the_shared_checkout(name):
@@ -22,6 +24,12 @@ def test_workflows_use_the_folder_inside_the_shared_checkout(name):
                 assert step["with"]["cache-dependency-path"] == "scotus/pyproject.toml"
             if "gh workflow run" in step.get("run", ""):
                 assert f"gh workflow run {name} " in step["run"]
+
+
+def test_pipeline_schedule_matches_the_refresh_cadence():
+    workflow = yaml.safe_load((Path(__file__).resolve().parents[2] / ".github/workflows/scotus-pipeline.yml").read_text())
+    triggers = workflow.get("on", workflow.get(True))
+    assert triggers["schedule"] == [{"cron": f"37 */{SCHEDULE_HOURS} * * *"}]
 
 
 def test_the_test_workflow_runs_the_suite_and_cannot_publish():
