@@ -15,6 +15,12 @@ CRS uses Congress.gov API v3 and GovInfo with an api.data.gov key held locally i
 
 The Supreme Court pipeline was first published on GitHub on September 26, 2026, and its six document datasets on September 27, 2026. The local build that seeded `us-scotus-opinions`, `us-scotus-case-documents` and `us-scotus-oral-arguments` was deleted on September 27, 2026 after every one of its rows was found on the Hub. The Hub holds the data.
 
+## Health check
+
+At 03:07, 09:07, 15:07 and 21:07 UTC, [`health-check`](.github/workflows/health-check.yml) checks the six publishing workflows and twelve datasets. It alerts through GitHub's failure email if the latest completed run failed or timed out, or no completed scheduled run was created within 17 hours (one 6-hour slot plus 11 hours for observed delays).
+
+Each dataset's newest recorded build commit must be in `HEAD`'s history and match its pipeline folder, and each last complete listing must be recent. The limit is how often the dataset is rewritten when nothing changed, plus one 6-hour slot and 11 hours of delay: 23 hours for datasets rewritten every run, 41 hours for the CRS research papers and the Beige Book, whose probes reread every list once a day. `us-local-laws` is rewritten only when its data changes, so an older build is a warning and its freshness is its workflow runs. A cancelled run or a dataset without a recorded commit gives a warning; stale data, old code past its limit, or an unreadable API or manifest fails the check. Thresholds are in `health/health.py`.
+
 ## Publishing
 
 Each dataset must trust repository `incrediblecrab/us-dataset-products`, branch `main` and its publishing workflow file under Hugging Face **Settings > Trusted Publishers**. Register `crs-pipeline.yml` for CRS research papers, `crs-summaries.yml` for bill summaries, `crs-constitution.yml` for the Constitution Annotated, `fed-pipeline.yml` for the Beige Book, `local-laws-pipeline.yml` for local laws and `scotus-pipeline.yml` for all seven Supreme Court datasets. These files live in the root `.github/workflows/`; a rename requires updating the registration.

@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) and GitHub Copilot CLI when working in this repository.
 
-`crs/`, `fed/`, `local-laws/` and `scotus/` are independent Python pipelines; `README.md` links their sources, datasets and commands.
+`crs/`, `fed/`, `local-laws/` and `scotus/` are independent Python pipelines; `health/` is a repo-wide check, not a pipeline. `README.md` links their sources, datasets and commands.
 
 Read `<folder>/CLAUDE.md` before working in that folder. Work in one folder must not change another.
 
