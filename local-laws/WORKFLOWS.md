@@ -1,6 +1,10 @@
 # workflows
 
-**Objective:** keep the Hugging Face dataset current with no personal device and no stored Hugging Face token. The workflow is scheduled at 12:37 UTC so that it starts near 17:00 UTC (12:00 EST, 13:00 EDT), because GitHub starts runs late. From September 27 to October 15, 2026 GitHub started every one of the 208 scheduled runs of the four dataset pipelines in this account late, by 2.4 to 9.2 hours, and the 18 daily runs scheduled at 14:00 UTC from October 13 by 3.9 to 6.2 hours, so the cron asks for 12:37 UTC to have them start near 17:00 UTC. A run GitHub starts on time starts at 12:37 UTC (7:37 EST, 8:37 EDT).
+**Objective:** keep the Hugging Face dataset current with no personal device and no stored Hugging Face token. The workflow is scheduled every 6 hours at 00:37, 06:37, 12:37 and 18:37 UTC. Minute 37 avoids the start of the hour, which [GitHub documents as a busy time](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule). GitHub starts scheduled runs late and sometimes drops them.
+
+**Schedule history:** On October 12, 2026, the owner asked for one daily update. From September 27 to October 15, 2026, GitHub started all 208 scheduled runs of the four dataset pipelines in this account 2.4 to 9.2 hours late; the 18 daily runs scheduled at 14:00 UTC from October 13 started 3.9 to 6.2 hours late. The daily cron was moved to 12:37 UTC to target a start about four hours later, near 17:00 UTC (12:00 EST, 13:00 EDT). From November 9 to 22, 2026, GitHub started this repository's daily runs 5.8 to 10.1 hours after 12:37 UTC. On November 23, 2026, the owner asked for a run every 6 hours.
+
+**Freshness:** When the probe finds neither source nor card changes, the run writes nothing to the dataset, not even a timestamp or run record. The repository health check tracks freshness from GitHub Actions workflow runs, not dataset commits. The card dates are source reading times.
 
 **Inputs:** GitHub's OIDC token, which Hugging Face exchanges for a one-hour dataset-scoped write token when the Hub dataset has this repository, branch and `local-laws-pipeline.yml` registered as a Trusted Publisher. No `HF_TOKEN` secret is used.
 

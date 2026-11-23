@@ -3,12 +3,13 @@
 import copy
 import json
 import re
+from pathlib import Path
 
 import yaml
 
 from local_laws import REPO_ID, locus, nfip, precision, tribes
 from local_laws.build import manifest_text
-from local_laws.card import NY_OUTSIDE, render
+from local_laws.card import NY_OUTSIDE, SCHEDULE_HOURS, render
 from local_laws.schema import TABLES
 from local_laws.store import CARD
 
@@ -365,9 +366,18 @@ def test_communities_without_a_program_are_mentioned_only_when_there_are_some(pu
     assert "Of those participating, 19 are in its Regular Program and 1 in its Emergency Program. The report marks" in card
 
 
-def test_the_card_states_its_schedule_and_ends_its_license_with_a_citation(published):
+def test_the_card_states_the_workflow_schedule(published):
+    workflow = yaml.safe_load((Path(__file__).resolve().parents[2] / ".github/workflows/local-laws-pipeline.yml").read_text())
+    triggers = workflow.get("on", workflow.get(True))  # PyYAML reads the key `on` as True
+    assert triggers["schedule"] == [{"cron": f"37 */{SCHEDULE_HOURS} * * *"}]
     card = render(published[1])
-    assert "scheduled daily at 12:37 UTC" in card
+    assert f"scheduled every {SCHEDULE_HOURS} hours at 00:37, 06:37, 12:37 and 18:37 UTC" in card
+    assert "starts scheduled runs late and sometimes drops them" in card
+    assert "November 9 to 22, 2026" in card and "5.8 to 10.1 hours after 12:37 UTC" in card
+
+
+def test_the_card_ends_its_license_with_a_citation(published):
+    card = render(published[1])
     citation = card[card.index("## Citation"):card.index("## By state")]
     assert card.index("## License") < card.index("## Citation") and "@misc{incrediblecrabuslocallaws," in citation
     assert "\\url{https://huggingface.co/datasets/incrediblecrab/us-local-laws}" in citation
