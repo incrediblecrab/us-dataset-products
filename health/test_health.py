@@ -51,7 +51,7 @@ def test_latest_completed_run(monkeypatch, conclusion, status):
     assert schedule.status == "ok"
 
 
-@pytest.mark.parametrize(("age", "status"), [(timedelta(hours=17), "ok"), (timedelta(hours=17, seconds=1), "error"), (None, "error")])
+@pytest.mark.parametrize(("age", "status"), [(timedelta(hours=23), "ok"), (timedelta(hours=23, seconds=1), "error"), (None, "error")])
 def test_manual_and_in_progress_runs_cannot_mask_missed_schedule(monkeypatch, age, status):
     runs = [run(NOW, "workflow_dispatch"), run(NOW, conclusion=None)]
     if age:
@@ -121,7 +121,7 @@ def test_a_dataset_rewritten_only_on_data_changes_warns_on_old_code(repo):
     assert health.freshness("incrediblecrab/us-local-laws", "local-laws", "manifest.json", None, NOW).status == "n/a"
 
 
-@pytest.mark.parametrize("dataset, hours", [("incrediblecrab/us-scotus-opinions", 23), ("incrediblecrab/us-crs-research-papers", 41), ("incrediblecrab/us-federal-reserve-beige-book", 41)])
+@pytest.mark.parametrize("dataset, hours", [("incrediblecrab/us-scotus-opinions", 35), ("incrediblecrab/us-crs-research-papers", 47), ("incrediblecrab/us-federal-reserve-beige-book", 47)])
 def test_listing_freshness_follows_each_dataset_s_refresh(dataset, hours):
     at = (NOW - timedelta(hours=hours)).isoformat()
     assert health.freshness(dataset, health.DATASETS[dataset], "manifest.json", {"at": at}, NOW).status == "ok"
@@ -167,7 +167,7 @@ def file(path):
 
 def test_paginated_collections_newest_build_but_each_listing_checked(monkeypatch, repo):
     _, commit = repo
-    cutoff = NOW - timedelta(hours=23)
+    cutoff = NOW - timedelta(hours=35)
     old = commit("scotus/code", "old", cutoff - timedelta(days=2))
     head = commit("scotus/code", "current", cutoff - timedelta(days=1))
     page = tree(OPINIONS)

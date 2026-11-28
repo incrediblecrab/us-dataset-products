@@ -14,7 +14,7 @@ from urllib.error import HTTPError
 from urllib.parse import quote, urljoin, urlsplit
 from urllib.request import Request, urlopen
 
-SCHEDULE_HOURS = 6  # The publishing workflows use "37 */6 * * *".
+SCHEDULE_HOURS = 12  # The publishing workflows use "37 */12 * * *".
 LATE_HOURS = 11  # GitHub started daily runs 5.8 to 10.1 hours late on November 9-22, 2026.
 MISSED_HOURS = SCHEDULE_HOURS + LATE_HOURS  # Allow one slot plus GitHub's observed delay.
 STALE_HOURS = 2 * SCHEDULE_HOURS + LATE_HOURS  # Allow two slots plus the same delay for a complete listing.
