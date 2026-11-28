@@ -212,6 +212,8 @@ def test_a_run_limited_to_some_slices_leaves_the_others_and_the_high_water_mark_
 def test_a_run_with_nothing_new_republishes_only_when_due(tmp_path, monkeypatch, hours, expected_commits):
     monkeypatch.setenv("GITHUB_SHA", "a" * 40)
     monkeypatch.delenv("GITHUB_RUN_ID", raising=False)
+    # With one run a day the daily count check falls due before the listing does; keep it out of the way so the run has nothing new.
+    monkeypatch.setattr(summaries, "RECONCILE_HOURS", 2 * summaries.SCHEDULE_HOURS)
     stamp = later(summaries.utcnow(), -hours)
     with monkeypatch.context() as previous:
         previous.setattr(summaries, "utcnow", lambda: stamp)
