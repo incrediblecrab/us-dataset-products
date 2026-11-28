@@ -1,11 +1,11 @@
-# Probe every 6 hours at 00:37, 06:37, 12:37 and 18:37 UTC, away from the busy start of the hour. GitHub starts scheduled runs late and sometimes drops them. From November 9 to 22, 2026, it started this repository's daily runs 5.8 to 10.1 hours after 12:37 UTC.
+# Probe every 12 hours at 00:37 and 12:37 UTC, away from the busy start of the hour. GitHub starts scheduled runs late and sometimes drops them. From November 9 to 22, 2026, it started this repository's daily runs 5.8 to 10.1 hours after 12:37 UTC.
 # The probe checks New York filing counts by year, the two FEMA file hashes, and the dataset card render. When the probe says only the card render changed, the workflow commits the card alone; otherwise a needed sync harvests New York and FEMA (when fema.gov refuses the runner, it reuses the FEMA files the last build stored, once they match the manifest), builds all tables from reviewed pins, commits only if the manifest and card changed, and verifies what was published. After any publishable update, the pin check opens one GitHub issue per new LOCUS or BIA release and passes with a warning linking to the open issue. The run fails if the check cannot finish or the issue cannot be looked up or filed.
 # Writes to Hugging Face use Trusted Publishing: with `id-token: write`, the CLI sets HF_OIDC_RESOURCE from its --repo before creating a writing HfApi, so no Hugging Face token is stored anywhere. The workflow uses no secret.
 name: local-laws-pipeline
 
 on:
   schedule:
-    - cron: "37 */6 * * *"
+    - cron: "37 */12 * * *"
   workflow_dispatch:
     inputs:
       args:

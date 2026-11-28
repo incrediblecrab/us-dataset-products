@@ -371,7 +371,7 @@ def test_the_card_states_the_workflow_schedule(published):
     triggers = workflow.get("on", workflow.get(True))  # PyYAML reads the key `on` as True
     assert triggers["schedule"] == [{"cron": f"37 */{SCHEDULE_HOURS} * * *"}]
     card = render(published[1])
-    assert f"scheduled every {SCHEDULE_HOURS} hours at 00:37, 06:37, 12:37 and 18:37 UTC" in card
+    assert f"scheduled every {SCHEDULE_HOURS} hours at 00:37 and 12:37 UTC" in card
     assert "starts scheduled runs late and sometimes drops them" in card
     assert "November 9 to 22, 2026" in card and "5.8 to 10.1 hours after 12:37 UTC" in card
 

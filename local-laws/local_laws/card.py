@@ -7,7 +7,7 @@ from . import GITHUB, REPO_ID, census, locus, nfip, nyindex, nylaws, precision, 
 from .schema import TABLES
 
 TITLE = "US Local Governments and Ordinance Coverage"
-SCHEDULE_HOURS = 6
+SCHEDULE_HOURS = 12
 LOCUS_URL = f"https://huggingface.co/datasets/{locus.REPO_ID}"
 LOCUS_PAPER = "https://arxiv.org/abs/2606.19334"
 LOCUS_CITATION = f'Denis Peskoff, Joe Barrow, Christopher Vu and Diag Davenport, "Freeing the Law with LOCUS: A Local Ordinance Corpus for the United States", [arXiv:2606.19334]({LOCUS_PAPER}) (2026)'
