@@ -350,6 +350,18 @@ def test_historical_opinion_rows_without_links_are_reread_and_identified(recover
         assert listing.pages[url]["reread_reason"] == "opinion rows without document links"
 
 
+@pytest.mark.parametrize("day,held", [("10/01/08", True), ("10/03/08", True), ("10/06/08", False), ("10/01/07", True)])
+def test_unlinked_opinion_rows_count_october_days_before_the_next_term_opens(day, held):
+    # relatingtoorders/07 lists Kennedy v. Louisiana opinions of October 1, 2008; OT2008 opened Monday, October 6, 2008.
+    url = BASE + "opinions/relatingtoorders/07"
+    page = unlinked_opinion_page(2007).replace(b"06/12/06", day.encode())
+    listing = Listing(COLLECTIONS["opinions-relating-to-orders"], Pages({url: Response(200, page)}), today=TODAY)
+    assert listing.unlinked_opinions(main_content(parse(page)), 2007) == int(held)
+    if held:
+        listing.list_all()
+        assert listing.pages[url] == {"term": 2007, "entries": 0, "unlinked_rows": 1}
+
+
 @pytest.mark.parametrize("page", [
     unlinked_opinion_page().replace(b"Term Year: 2005", b"Unrelated page"),
     unlinked_opinion_page().replace(b"<th>Docket</th>", b"<th>Other</th>"),

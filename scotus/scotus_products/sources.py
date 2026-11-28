@@ -10,7 +10,7 @@ import json
 import re
 from collections import Counter
 from dataclasses import dataclass, field as dataclass_field
-from datetime import date
+from datetime import date, timedelta
 from urllib.parse import urlsplit
 
 from .markup import field, line_of, main_content, parse, resolve, squash
@@ -53,6 +53,15 @@ def reread_url(url):
 def current_term(today):
     """The October Term in progress: a term starts on the first Monday of October, and the site files the weeks before it under the term that is ending."""
     return today.year if today.month >= 10 else today.year - 1
+
+
+def filed_in_term(day, term):
+    """Whether a listing date can be filed under October Term term: current_term's, or an October day before the first Monday of October in term + 1, which the site files under the term that is ending. relatingtoorders/07 lists two Kennedy v. Louisiana opinions of October 1, 2008 (OT2008 opened October 6), and from November 25, 2026, while the site served that page without document links, rejecting them made it read as empty and stopped the collection on every run."""
+    if current_term(day) == term:
+        return True
+    opening = date(term + 1, 10, 1)
+    opening += timedelta(days=-opening.weekday() % 7)
+    return day.year == term + 1 and day.month == 10 and day < opening
 
 
 def iso_date(text, today=None):
@@ -953,7 +962,7 @@ class Listing:
             for row in table.xpath(".//tr[td]"):
                 values = _row_of(row.xpath("./td")[0])
                 day = iso_date((values or {}).get("Date"), self.today)
-                if not day or current_term(date.fromisoformat(day)) != term or not values.get("Docket") or not values.get("Name"):
+                if not day or not filed_in_term(date.fromisoformat(day), term) or not values.get("Docket") or not values.get("Name"):
                     return 0
                 rows += 1
         return rows
