@@ -32,7 +32,7 @@ RETRY_AFTER_HOURS = 24
 # The probe asks for a sync once the last full listing is this old, so every list is reread even when the landing page has not changed.
 LISTING_HOURS = 24
 # The workflow runs every this many hours (card.SCHEDULE is its cron); an unchanged sync republishes its listing and run record once the last is an hour short of that old.
-SCHEDULE_HOURS = 12
+SCHEDULE_HOURS = 24
 REPUBLISH_HOURS = SCHEDULE_HOURS - 1
 LEASE_MINUTES = 45
 RUNS_KEPT = 20

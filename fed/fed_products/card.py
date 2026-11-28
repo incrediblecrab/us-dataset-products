@@ -5,13 +5,13 @@ from collections import Counter, defaultdict
 
 from . import board, minneapolis
 from .beige_book import MINNEAPOLIS_RECHECK_DAYS, RECENT_DAYS, RECENT_RECHECK_DAYS, RECHECK_DAYS, REPO_ID, SCHEMA
-from .pipeline import LEASE_MINUTES, LISTING_HOURS, MAX_ATTEMPTS, PROBE_KEY, RETRY_AFTER_HOURS, SCHEDULE_HOURS, probe_state
+from .pipeline import LEASE_MINUTES, LISTING_HOURS, MAX_ATTEMPTS, PROBE_KEY, RETRY_AFTER_HOURS, probe_state
 from .sections import DISTRICTS, STANDARD, rank
 
 GITHUB_REPO = "https://github.com/incrediblecrab/us-dataset-products"
 GITHUB = f"{GITHUB_REPO}/tree/main/fed"
 # The workflow's cron (.github/workflows/fed-pipeline.yml at the repository root); a test holds the two equal.
-SCHEDULE = f"37 */{SCHEDULE_HOURS} * * *"
+SCHEDULE = "37 12 * * *"
 BOARD_TERMS = "https://www.federalreserve.gov/disclaimer.htm"
 MINNEAPOLIS_TERMS = "https://www.minneapolisfed.org/site-information/disclaimer"
 COLUMN_DOCS = {
@@ -170,7 +170,7 @@ def render(manifest):
         "",
         "## How it stays current",
         "",
-        f"A GitHub Actions job is scheduled every {SCHEDULE_HOURS} hours at 00:37 and 12:37 UTC (`{SCHEDULE}`). It reads the Board's Beige Book landing page, one request, and compares the newest edition it links and the number it links with the last complete sync, which it reads from `{PROBE_KEY}` in this card's metadata, so the check downloads no file. When either changed, or the last complete sync is {LISTING_HOURS} hours old, the job reads every list and the Minneapolis sitemap, fetches the editions that are new or whose links changed, and commits the changed years with this card. Then it checks the files on the Hub against the manifest and against a fresh reading of every list. A job that runs out of time while still fetching starts the next one itself.",
+        f"A GitHub Actions job is scheduled daily at 12:37 UTC (`{SCHEDULE}`). It reads the Board's Beige Book landing page, one request, and compares the newest edition it links and the number it links with the last complete sync, which it reads from `{PROBE_KEY}` in this card's metadata, so the check downloads no file. When either changed, or the last complete sync is {LISTING_HOURS} hours old, the job reads every list and the Minneapolis sitemap, fetches the editions that are new or whose links changed, and commits the changed years with this card. Then it checks the files on the Hub against the manifest and against a fresh reading of every list. A job that runs out of time while still fetching starts the next one itself.",
         "",
         f"The Board's pages can change after release: on September 25, 2026 the pages of January 14, 2026 answered with a Last-Modified date of February 26, 2026. So the job also rechecks editions it holds: every {RECENT_RECHECK_DAYS} days for editions under {RECENT_DAYS} days old and every {RECHECK_DAYS} days for older ones, with a conditional request that the Board answers without a body when the page has not changed, and each Minneapolis month every {MINNEAPOLIS_RECHECK_DAYS} days besides whenever its sitemap entries change. An edition no list names any more is removed only once its page is gone; until then the check after each sync reports it.",
         "",

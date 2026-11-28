@@ -16,7 +16,7 @@ This folder builds and keeps current the public Hugging Face dataset `incredible
 
 ## How it stays current
 
-`../.github/workflows/fed-pipeline.yml` is scheduled every 12 hours at 00:37 and 12:37 UTC and publishes through Hugging Face Trusted Publishing with no stored token. GitHub starts scheduled runs late and sometimes drops them. From November 9 to 22, 2026 it started this repository's daily runs 5.8 to 10.1 hours after 12:37 UTC. GitHub disables schedules after 60 days without a commit; the workflow's `inactivity` job fails at 50 days to warn first and deliberately makes no keepalive commit, which GitHub treats as a Terms violation, so do not add one.
+`../.github/workflows/fed-pipeline.yml` is scheduled daily at 12:37 UTC and publishes through Hugging Face Trusted Publishing with no stored token. GitHub starts scheduled runs late and sometimes drops them. From November 9 to 22, 2026 it started this repository's daily runs 5.8 to 10.1 hours after 12:37 UTC. GitHub disables schedules after 60 days without a commit; the workflow's `inactivity` job fails at 50 days to warn first and deliberately makes no keepalive commit, which GitHub treats as a Terms violation, so do not add one.
 
 ## Structure
 
