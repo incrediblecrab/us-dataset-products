@@ -528,6 +528,8 @@ def test_unchanged_cases_republish_only_after_a_full_check_when_due(world, capsy
             return clock.astimezone(tz)
 
     monkeypatch.setattr(cases, "datetime", Clock)
+    # Current-term dockets are rechecked on their own clock, which is shorter than the schedule; keep them out of the way so the run is unchanged.
+    monkeypatch.setattr(cases, "CURRENT_RECHECK", timedelta(hours=2 * SCHEDULE_HOURS))
     world.run(capsys)
     before = world.manifest()
     asked = len(world.site.calls)
@@ -705,7 +707,7 @@ def test_verify_names_a_term_file_with_other_columns(world, capsys):
 
 def test_the_cases_card_ends_with_a_citation_naming_the_dataset():
     card = cases.render_card(cases.empty_manifest())
-    assert "scheduled every 6 hours at 00:37, 06:37, 12:37 and 18:37 UTC" in card
+    assert "scheduled every 12 hours at 00:37 and 12:37 UTC" in card
     assert "sometimes drops them" in card and "5.8 to 10.1 hours after 12:37 UTC" in card
     assert card.rstrip().endswith("```") and f"\\url{{https://huggingface.co/datasets/{cases.REPO_ID}}}" in card[card.index("## Citation"):]
 

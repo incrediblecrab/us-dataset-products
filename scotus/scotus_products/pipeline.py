@@ -34,7 +34,7 @@ from .store import Superseded, dumps
 log = logging.getLogger("scotus_products")
 
 MANIFEST_VERSION = 1
-SCHEDULE_HOURS = 6
+SCHEDULE_HOURS = 12
 MAX_ATTEMPTS = 3
 # A unit that failed MAX_ATTEMPTS times is left alone this long, then tried again.
 RETRY_AFTER_HOURS = 24
