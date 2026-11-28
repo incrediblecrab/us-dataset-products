@@ -51,7 +51,7 @@ def test_latest_completed_run(monkeypatch, conclusion, status):
     assert schedule.status == "ok"
 
 
-@pytest.mark.parametrize(("age", "status"), [(timedelta(hours=23), "ok"), (timedelta(hours=23, seconds=1), "error"), (None, "error")])
+@pytest.mark.parametrize(("age", "status"), [(timedelta(hours=35), "ok"), (timedelta(hours=35, seconds=1), "error"), (None, "error")])
 def test_manual_and_in_progress_runs_cannot_mask_missed_schedule(monkeypatch, age, status):
     runs = [run(NOW, "workflow_dispatch"), run(NOW, conclusion=None)]
     if age:
@@ -121,7 +121,7 @@ def test_a_dataset_rewritten_only_on_data_changes_warns_on_old_code(repo):
     assert health.freshness("incrediblecrab/us-local-laws", "local-laws", "manifest.json", None, NOW).status == "n/a"
 
 
-@pytest.mark.parametrize("dataset, hours", [("incrediblecrab/us-scotus-opinions", 35), ("incrediblecrab/us-crs-research-papers", 47), ("incrediblecrab/us-federal-reserve-beige-book", 47)])
+@pytest.mark.parametrize("dataset, hours", [("incrediblecrab/us-scotus-opinions", 59), ("incrediblecrab/us-crs-research-papers", 59), ("incrediblecrab/us-federal-reserve-beige-book", 59)])
 def test_listing_freshness_follows_each_dataset_s_refresh(dataset, hours):
     at = (NOW - timedelta(hours=hours)).isoformat()
     assert health.freshness(dataset, health.DATASETS[dataset], "manifest.json", {"at": at}, NOW).status == "ok"
@@ -135,13 +135,13 @@ HELD = ["https://www.supremecourt.gov/opinions/relatingtoorders/07 has 11 opinio
     ({"finished": True, "stopped": None, "held": HELD, "ended": "2026-11-28T04:18:38Z"}, "warning"),
     ({"finished": True, "stopped": None, "held": [], "ended": "2026-11-28T04:18:38Z"}, "error"),
     ({"finished": False, "stopped": "budget", "held": HELD, "ended": "2026-11-28T04:18:38Z"}, "error"),
-    ({"finished": True, "stopped": None, "held": HELD, "ended": "2026-11-26T04:18:38Z"}, "error"),
+    ({"finished": True, "stopped": None, "held": HELD, "ended": "2026-11-25T04:18:38Z"}, "error"),
     ({"finished": True, "stopped": None, "held": HELD}, "error"),
 ])
 def test_a_held_listing_warns_only_while_its_runs_finish(run, status):
     dataset = "incrediblecrab/us-scotus-opinions"
     now = datetime(2026, 11, 28, 15, 20, tzinfo=UTC)
-    listing = {"at": "2026-11-27T02:58:41Z"}
+    listing = {"at": "2026-11-25T02:58:41Z"}
     row = health.freshness(dataset, health.DATASETS[dataset], "opinions-relating-to-orders/manifest.json", listing, now, [{"held": HELD, "finished": True, "ended": "2026-11-28T04:18:38Z"}, run])
     assert row.status == status
     if status == "warning":
@@ -189,7 +189,7 @@ def file(path):
 
 def test_paginated_collections_newest_build_but_each_listing_checked(monkeypatch, repo):
     _, commit = repo
-    cutoff = NOW - timedelta(hours=35)
+    cutoff = NOW - timedelta(hours=59)
     old = commit("scotus/code", "old", cutoff - timedelta(days=2))
     head = commit("scotus/code", "current", cutoff - timedelta(days=1))
     page = tree(OPINIONS)
