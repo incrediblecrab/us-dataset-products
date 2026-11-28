@@ -9,7 +9,7 @@ import yaml
 
 from local_laws import REPO_ID, locus, nfip, precision, tribes
 from local_laws.build import manifest_text
-from local_laws.card import NY_OUTSIDE, SCHEDULE_HOURS, render
+from local_laws.card import NY_OUTSIDE, render
 from local_laws.schema import TABLES
 from local_laws.store import CARD
 
@@ -369,9 +369,9 @@ def test_communities_without_a_program_are_mentioned_only_when_there_are_some(pu
 def test_the_card_states_the_workflow_schedule(published):
     workflow = yaml.safe_load((Path(__file__).resolve().parents[2] / ".github/workflows/local-laws-pipeline.yml").read_text())
     triggers = workflow.get("on", workflow.get(True))  # PyYAML reads the key `on` as True
-    assert triggers["schedule"] == [{"cron": f"37 */{SCHEDULE_HOURS} * * *"}]
+    assert triggers["schedule"] == [{"cron": "37 12 * * *"}]
     card = render(published[1])
-    assert f"scheduled every {SCHEDULE_HOURS} hours at 00:37 and 12:37 UTC" in card
+    assert f"scheduled daily at 12:37 UTC" in card
     assert "starts scheduled runs late and sometimes drops them" in card
     assert "November 9 to 22, 2026" in card and "5.8 to 10.1 hours after 12:37 UTC" in card
 

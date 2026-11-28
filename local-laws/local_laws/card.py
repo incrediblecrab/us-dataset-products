@@ -7,7 +7,6 @@ from . import GITHUB, REPO_ID, census, locus, nfip, nyindex, nylaws, precision, 
 from .schema import TABLES
 
 TITLE = "US Local Governments and Ordinance Coverage"
-SCHEDULE_HOURS = 12
 LOCUS_URL = f"https://huggingface.co/datasets/{locus.REPO_ID}"
 LOCUS_PAPER = "https://arxiv.org/abs/2606.19334"
 LOCUS_CITATION = f'Denis Peskoff, Joe Barrow, Christopher Vu and Diag Davenport, "Freeing the Law with LOCUS: A Local Ordinance Corpus for the United States", [arXiv:2606.19334]({LOCUS_PAPER}) (2026)'
@@ -709,7 +708,6 @@ def render(manifest):
         "",
     ]
     readings = source_readings(manifest)
-    times = [f"{hour:02d}:37" for hour in range(0, 24, SCHEDULE_HOURS)]
     lines += [
         "## Source freshness",
         "",
@@ -718,7 +716,7 @@ def render(manifest):
         f"| New York local-law filings | {moment(readings['ny'])} |",
         f"| FEMA Community Status Book | {moment(readings['nfip'])} |",
         "",
-        f"A GitHub Actions job is scheduled every {SCHEDULE_HOURS} hours at {', '.join(times[:-1])} and {times[-1]} UTC. GitHub starts scheduled runs late and sometimes drops them. From November 9 to 22, 2026, it started this repository's daily runs 5.8 to 10.1 hours after 12:37 UTC. A run rebuilds only when its probe finds a source changed. A successful scheduled run does not prove FEMA is current. If fema.gov cannot be read, the run reports degraded freshness and retains the published FEMA reading while New York updates can continue. These dates describe the stored data, not the latest probe; the Actions summary reports which sources that probe could check.",
+        f"A GitHub Actions job is scheduled daily at 12:37 UTC. GitHub starts scheduled runs late and sometimes drops them. From November 9 to 22, 2026, it started this repository's daily runs 5.8 to 10.1 hours after 12:37 UTC. A run rebuilds only when its probe finds a source changed. A successful scheduled run does not prove FEMA is current. If fema.gov cannot be read, the run reports degraded freshness and retains the published FEMA reading while New York updates can continue. These dates describe the stored data, not the latest probe; the Actions summary reports which sources that probe could check.",
         "",
     ]
     lines += coverage(stats) + new_york(manifest) + ny_index(manifest) + recognized_tribes(manifest) + flood_communities(manifest) + use() + files(manifest) + matching(manifest) + codifiers(manifest) + gaps(manifest) + sources(manifest) + license_section(manifest) + citation() + by_state(stats)

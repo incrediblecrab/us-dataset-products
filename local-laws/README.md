@@ -33,7 +33,7 @@ The Census files, LOCUS, the index release and the two notices are pinned by SHA
 
 ## Running a build
 
-GitHub Actions is scheduled to probe every 12 hours at 00:37 and 12:37 UTC. GitHub starts scheduled runs late and sometimes drops them. From November 9 to 22, 2026, it started this repository's daily runs 5.8 to 10.1 hours after 12:37 UTC.
+GitHub Actions is scheduled to probe daily at 12:37 UTC. GitHub starts scheduled runs late and sometimes drops them. From November 9 to 22, 2026, it started this repository's daily runs 5.8 to 10.1 hours after 12:37 UTC.
 
 Each scheduled run first probes with about 38 New York count requests and 2 FEMA downloads; if those and the pinned LOCUS revision match the published manifest and the card render still matches, it skips the full build. When a build is needed, the New York harvest makes about 1,500 requests to New York's API, one a second; the FEMA harvest makes 2 to fema.gov, 15 seconds apart, for 3.1 MB of report and 0.96 MB of OpenFEMA parquet; `run` without `--ny-snapshot` or `--nfip-snapshot` makes them itself. A run downloads 1.29 GB of LOCUS `sections/*.parquet` to a work directory it then deletes, the 10 MB index release from Zenodo and the Bureau's two notices, about 100 KB, from the Federal Register; `verify` downloads the index release, the notices, CG2200ORG02 and FEMA's report again, to compare; it compares the report row for row only while fema.gov still serves the file the build read, since FEMA regenerates it, and always compares the rows with the copy of the report the build stored, which needs no network.
 

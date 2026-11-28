@@ -17,7 +17,7 @@ This folder builds and publishes the public Hugging Face dataset `incrediblecrab
 
 ## How it fits together
 
-GitHub Actions is scheduled to probe every 12 hours at 00:37 and 12:37 UTC. GitHub starts scheduled runs late and sometimes drops them. From November 9 to 22, 2026, it started this repository's daily runs 5.8 to 10.1 hours after 12:37 UTC. Keep the workflow cron in step with `SCHEDULE_HOURS` in `local_laws/card.py`.
+GitHub Actions is scheduled to probe daily at 12:37 UTC. GitHub starts scheduled runs late and sometimes drops them. From November 9 to 22, 2026, it started this repository's daily runs 5.8 to 10.1 hours after 12:37 UTC. Keep the workflow cron in step with `SCHEDULE_HOURS` in `local_laws/card.py`.
 
 `cli.py` dispatches to `build.py`, which downloads, checks and assembles the six tables, then `store.py` writes the tables, the FEMA files read, manifest and card as one commit, guarded by a parent-commit fence. Each source has its own module (`census.py`, `locus.py`, `nylaws.py`, `nyindex.py`, `tribes.py`, `nfip.py`); `schema.py` documents columns, `card.py` renders the card and `verify.py` re-reads and compares what was published. `http.py` owns pacing (one New York request a second, 15 seconds between fema.gov requests), retries and stopping on bot challenges; keep every network call going through it.
 
