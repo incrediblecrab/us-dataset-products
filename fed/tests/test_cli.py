@@ -326,7 +326,7 @@ def test_the_schedule_is_what_the_code_and_card_say():
     _, triggers = load_workflow()
     assert [entry["cron"] for entry in triggers["schedule"]] == [card.SCHEDULE] == [f"37 */{card.SCHEDULE_HOURS} * * *"]
     text = card.render({})
-    assert f"scheduled every {card.SCHEDULE_HOURS} hours at 00:37, 06:37, 12:37 and 18:37 UTC (`{card.SCHEDULE}`)" in text
+    assert f"scheduled every {card.SCHEDULE_HOURS} hours at 00:37 and 12:37 UTC (`{card.SCHEDULE}`)" in text
     assert "GitHub starts scheduled runs late and sometimes drops them" in text
     assert "From November 9 to 22, 2026 it started this repository's daily runs 5.8 to 10.1 hours after 12:37 UTC" in text
 
