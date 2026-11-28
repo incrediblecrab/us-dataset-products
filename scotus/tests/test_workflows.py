@@ -29,7 +29,7 @@ def test_workflows_use_the_folder_inside_the_shared_checkout(name):
 def test_pipeline_schedule_matches_the_refresh_cadence():
     workflow = yaml.safe_load((Path(__file__).resolve().parents[2] / ".github/workflows/scotus-pipeline.yml").read_text())
     triggers = workflow.get("on", workflow.get(True))
-    assert triggers["schedule"] == [{"cron": f"37 */{SCHEDULE_HOURS} * * *"}]
+    assert triggers["schedule"] == [{"cron": "37 12 * * *"}]
 
 
 def test_the_test_workflow_runs_the_suite_and_cannot_publish():

@@ -707,7 +707,7 @@ def test_verify_names_a_term_file_with_other_columns(world, capsys):
 
 def test_the_cases_card_ends_with_a_citation_naming_the_dataset():
     card = cases.render_card(cases.empty_manifest())
-    assert "scheduled every 12 hours at 00:37 and 12:37 UTC" in card
+    assert "scheduled daily at 12:37 UTC" in card
     assert "sometimes drops them" in card and "5.8 to 10.1 hours after 12:37 UTC" in card
     assert card.rstrip().endswith("```") and f"\\url{{https://huggingface.co/datasets/{cases.REPO_ID}}}" in card[card.index("## Citation"):]
 
