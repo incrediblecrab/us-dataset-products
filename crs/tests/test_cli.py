@@ -371,15 +371,15 @@ def crons(name):
 
 
 def test_every_schedule_is_what_the_code_and_cards_say():
-    # The owner asked on October 12, 2026 for every dataset to update once a day at 9:00 EST, 14:00 UTC (until then, September 26, 2026: 00:00 and 12:00 UTC). GitHub started those runs about four hours late, so on October 15, 2026 they were scheduled at 09:37 UTC to start near 14:00 UTC, and the same day the owner moved the target to noon EST, so they were scheduled at 12:37 UTC. On November 23, 2026 the owner asked for a run every 6 hours.
-    assert summaries.SCHEDULE_HOURS == 6
+    # The owner asked on October 12, 2026 for every dataset to update once a day at 9:00 EST, 14:00 UTC (until then, September 26, 2026: 00:00 and 12:00 UTC). GitHub started those runs about four hours late, so on October 15, 2026 they were scheduled at 09:37 UTC to start near 14:00 UTC, and the same day the owner moved the target to noon EST, so they were scheduled at 12:37 UTC. On November 23, 2026 the owner asked for a run every 6 hours, and on November 27, 2026 for one every 12 hours.
+    assert summaries.SCHEDULE_HOURS == 12
     for name in DATASETS:
         assert crons(name) == [f"37 */{summaries.SCHEDULE_HOURS} * * *"], name
     # The daily check keeps to one slot: the run a day later is due, the one before it is not.
     assert 24 - summaries.SCHEDULE_HOURS < summaries.RECONCILE_HOURS < 24
     for dataset in DATASETS.values():
         text = cli.card_of(dataset)({})
-        assert f"every {summaries.SCHEDULE_HOURS} hours at 00:37, 06:37, 12:37 and 18:37 UTC" in text, dataset
+        assert f"every {summaries.SCHEDULE_HOURS} hours at 00:37 and 12:37 UTC" in text, dataset
         assert "starts scheduled runs late and sometimes drops them" in text, dataset
         assert "From November 9 to 22, 2026 it started this repository's daily runs 5.8 to 10.1 hours after 12:37 UTC" in text, dataset
         assert not re.search(r"every 5 minutes|scheduled at 12:37 UTC|once a week|weekly", text), dataset

@@ -27,7 +27,7 @@ log = logging.getLogger("crs_products")
 MANIFEST_VERSION = 2
 SOURCE = "https://api.congress.gov/v3/crsreport"
 # How often the three CRS workflows run (.github/workflows/crs-*.yml at the repository root; a test checks their crons). An unchanged complete sync republishes its listing and run record once the last is an hour short of that old.
-SCHEDULE_HOURS = 6
+SCHEDULE_HOURS = 12
 REPUBLISH_HOURS = SCHEDULE_HOURS - 1
 MAX_ATTEMPTS = 3
 # A product that failed MAX_ATTEMPTS times is left alone this long, then tried again.

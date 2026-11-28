@@ -1,11 +1,11 @@
-# Scheduled every 6 hours at 00:37, 06:37, 12:37 and 18:37 UTC. GitHub starts scheduled runs late and sometimes drops them. From November 9 to 22, 2026 it started this repository's daily runs 5.8 to 10.1 hours after 12:37 UTC.
+# Scheduled every 12 hours at 00:37 and 12:37 UTC. GitHub starts scheduled runs late and sometimes drops them. From November 9 to 22, 2026 it started this repository's daily runs 5.8 to 10.1 hours after 12:37 UTC.
 # List the Constitution Annotated on GovInfo (26 requests and 1.7 minutes when nothing had changed, on September 26, 2026), fetch the units that are new or whose package's lastModified changed, and commit. Every run downloads manifest.json, which the Hub counts as a download of the dataset. After a run that committed, verify the Hub against the manifest and GovInfo, and squash long history.
 # Writes to Hugging Face use Trusted Publishing: with `id-token: write`, the CLI sets HF_OIDC_RESOURCE from the dataset's repo, so no Hugging Face token is stored anywhere. The only secret is the api.data.gov key, which GovInfo counts separately from api.congress.gov.
 name: crs-constitution
 
 on:
   schedule:
-    - cron: "37 */6 * * *"
+    - cron: "37 */12 * * *"
   workflow_dispatch:
     inputs:
       budget_minutes:

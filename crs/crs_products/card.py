@@ -11,7 +11,7 @@ from .verify import TOLERANCE_MIN
 
 GITHUB_REPO = "https://github.com/incrediblecrab/us-dataset-products"
 GITHUB = f"{GITHUB_REPO}/tree/main/crs"
-SCHEDULE_TEXT = f"A GitHub Actions job is scheduled every {SCHEDULE_HOURS} hours at 00:37, 06:37, 12:37 and 18:37 UTC. GitHub starts scheduled runs late and sometimes drops them. From November 9 to 22, 2026 it started this repository's daily runs 5.8 to 10.1 hours after 12:37 UTC."
+SCHEDULE_TEXT = f"A GitHub Actions job is scheduled every {SCHEDULE_HOURS} hours at 00:37 and 12:37 UTC. GitHub starts scheduled runs late and sometimes drops them. From November 9 to 22, 2026 it started this repository's daily runs 5.8 to 10.1 hours after 12:37 UTC."
 REPO_ID = "incrediblecrab/us-crs-research-papers"
 COLUMN_DOCS = {
     "id": "CRS product number, for example R49359, IN12740 or 98-684",
