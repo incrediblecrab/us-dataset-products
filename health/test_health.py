@@ -128,6 +128,28 @@ def test_listing_freshness_follows_each_dataset_s_refresh(dataset, hours):
     assert health.freshness(dataset, health.DATASETS[dataset], "manifest.json", {"at": at}, NOW + timedelta(seconds=1)).status == "error"
 
 
+HELD = ["https://www.supremecourt.gov/opinions/relatingtoorders/07 has 11 opinion rows but no document links after a re-read"]
+
+
+@pytest.mark.parametrize(("run", "status"), [
+    ({"finished": True, "stopped": None, "held": HELD, "ended": "2026-11-28T04:18:38Z"}, "warning"),
+    ({"finished": True, "stopped": None, "held": [], "ended": "2026-11-28T04:18:38Z"}, "error"),
+    ({"finished": False, "stopped": "budget", "held": HELD, "ended": "2026-11-28T04:18:38Z"}, "error"),
+    ({"finished": True, "stopped": None, "held": HELD, "ended": "2026-11-26T04:18:38Z"}, "error"),
+    ({"finished": True, "stopped": None, "held": HELD}, "error"),
+])
+def test_a_held_listing_warns_only_while_its_runs_finish(run, status):
+    dataset = "incrediblecrab/us-scotus-opinions"
+    now = datetime(2026, 11, 28, 15, 20, tzinfo=UTC)
+    listing = {"at": "2026-11-27T02:58:41Z"}
+    row = health.freshness(dataset, health.DATASETS[dataset], "opinions-relating-to-orders/manifest.json", listing, now, [{"held": HELD, "finished": True, "ended": "2026-11-28T04:18:38Z"}, run])
+    assert row.status == status
+    if status == "warning":
+        assert "held 1 page(s)" in row.detail and "relatingtoorders/07" in row.detail
+    # A fresh listing is ok whatever its runs held.
+    assert health.freshness(dataset, health.DATASETS[dataset], "x/manifest.json", {"at": "2026-11-28T04:18:38Z"}, now, [run]).status == "ok"
+
+
 def test_regular_and_cases_run_order_and_fallbacks():
     old = {"code": {"commit": "old"}}
     new = {"code": {"commit": "new"}}

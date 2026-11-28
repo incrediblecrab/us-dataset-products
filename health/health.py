@@ -168,7 +168,16 @@ def alignment(dataset, folder, commit, now):
     return Row(dataset, "ok", f"{path} matches build {commit}")
 
 
-def freshness(dataset, folder, path, listing, now):
+def held_run(runs, now, limit):
+    """The newest run where it finished within limit hours while holding pages, else None. A held page (scotus pipeline.held_pages) keeps the last complete listing, so its time stops advancing while every run still succeeds: relatingtoorders/07 lost its document links on November 25, 2026, and holding its one stored file froze the listing at 2026-11-27T02:58:41Z."""
+    run = (runs or [{}])[-1]
+    if not isinstance(run, dict) or not run.get("held") or not run.get("finished") or run.get("stopped") or not run.get("ended"):
+        return None
+    return run if now - timestamp(run["ended"]) <= timedelta(hours=limit) else None
+
+
+def freshness(dataset, folder, path, listing, now, runs=None):
+    """A listing older than its limit is an error, except a warning where the newest run finished within the limit and held pages: the collection is being read, and the hold, not a stopped pipeline, keeps its listing time."""
     subject = f"{dataset}/{path}"
     limit = allowance(dataset)
     if limit is None:
@@ -176,8 +185,12 @@ def freshness(dataset, folder, path, listing, now):
     at = (listing or {}).get("at")
     if not at:
         return Row(subject, "error", "No time recorded for the last complete run")
-    stale = now - timestamp(at) > timedelta(hours=limit)
-    return Row(subject, "error" if stale else "ok", f"Last complete listing: {at} (limit {limit} hours)")
+    detail = f"Last complete listing: {at} (limit {limit} hours)"
+    if now - timestamp(at) <= timedelta(hours=limit):
+        return Row(subject, "ok", detail)
+    if run := held_run(runs, now, limit):
+        return Row(subject, "warning", f"{detail}; the run that ended {run['ended']} finished but held {len(run['held'])} page(s): {run['held'][0]}")
+    return Row(subject, "error", detail)
 
 
 def check_dataset(dataset, now):
@@ -194,7 +207,7 @@ def check_dataset(dataset, now):
                 builds.append((timestamp(at) if at else datetime.min.replace(tzinfo=UTC), commit))
             try:
                 listing = {"at": manifest.get("last_complete_at")} if dataset == CASES else manifest.get("listing")
-                listings.append(freshness(dataset, folder, path, listing, now))
+                listings.append(freshness(dataset, folder, path, listing, now, None if dataset == CASES else manifest.get("runs")))
             except (ValueError, TypeError) as exc:
                 listings.append(Row(f"{dataset}/{path}", "error", f"Invalid listing.at: {exc}"))
     except (CheckError, KeyError, TypeError, ValueError, AttributeError) as exc:
